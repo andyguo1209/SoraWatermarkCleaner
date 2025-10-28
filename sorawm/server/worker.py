@@ -27,24 +27,30 @@ class WMRemoveTaskWorker:
         self.sora_wm = SoraWM()
         logger.info("SoraWM models initialized")
 
-    async def create_task(self) -> str:
+    async def create_task(self, user_id: int, filename: str = None) -> str:
+        """创建新任务"""
         task_uuid = str(uuid4())
         async with get_session() as session:
             task = Task(
                 id=task_uuid,
+                user_id=user_id,
                 video_path="",  # 暂时为空，后续会更新
+                video_filename=filename,
                 status=Status.UPLOADING,
                 percentage=0,
             )
             session.add(task)
-        logger.info(f"Task {task_uuid} created with UPLOADING status")
+        logger.info(f"Task {task_uuid} created for user {user_id} with UPLOADING status")
         return task_uuid
 
-    async def queue_task(self, task_id: str, video_path: Path):
+    async def queue_task(self, task_id: str, video_path: Path, filename: str = None):
+        """将任务加入处理队列"""
         async with get_session() as session:
             result = await session.execute(select(Task).where(Task.id == task_id))
             task = result.scalar_one()
             task.video_path = str(video_path)
+            if filename:
+                task.video_filename = filename
             task.status = Status.PROCESSING
             task.percentage = 0
 
@@ -52,12 +58,14 @@ class WMRemoveTaskWorker:
         logger.info(f"Task {task_id} queued for processing: {video_path}")
 
     async def mark_task_error(self, task_id: str, error_msg: str):
+        """标记任务为错误状态"""
         async with get_session() as session:
             result = await session.execute(select(Task).where(Task.id == task_id))
             task = result.scalar_one_or_none()
             if task:
                 task.status = Status.ERROR
                 task.percentage = 0
+                task.error_message = error_msg
         logger.error(f"Task {task_id} marked as ERROR: {error_msg}")
 
     async def run(self):
@@ -114,6 +122,7 @@ class WMRemoveTaskWorker:
                     task = result.scalar_one()
                     task.status = Status.ERROR
                     task.percentage = 0
+                    task.error_message = str(e)
 
             finally:
                 self.queue.task_done()
@@ -129,9 +138,12 @@ class WMRemoveTaskWorker:
         except Exception as e:
             logger.error(f"Error updating progress for task {task_id}: {e}")
 
-    async def get_task_status(self, task_id: str) -> WMRemoveResults | None:
+    async def get_task_status(self, task_id: str, user_id: int) -> WMRemoveResults | None:
+        """获取任务状态（带用户验证）"""
         async with get_session() as session:
-            result = await session.execute(select(Task).where(Task.id == task_id))
+            result = await session.execute(
+                select(Task).where(Task.id == task_id, Task.user_id == user_id)
+            )
             task = result.scalar_one_or_none()
             if task is None:
                 return None
@@ -141,9 +153,12 @@ class WMRemoveTaskWorker:
                 download_url=task.download_url,
             )
 
-    async def get_output_path(self, task_id: str) -> Path | None:
+    async def get_output_path(self, task_id: str, user_id: int) -> Path | None:
+        """获取任务输出路径（带用户验证）"""
         async with get_session() as session:
-            result = await session.execute(select(Task).where(Task.id == task_id))
+            result = await session.execute(
+                select(Task).where(Task.id == task_id, Task.user_id == user_id)
+            )
             task = result.scalar_one_or_none()
             if task is None or task.output_path is None:
                 return None

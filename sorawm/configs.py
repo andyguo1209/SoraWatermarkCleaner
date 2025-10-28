@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -25,3 +26,48 @@ DATA_PATH = ROOT / "data"
 DATA_PATH.mkdir(exist_ok=True, parents=True)
 
 SQLITE_PATH = DATA_PATH / "db.sqlite3"
+
+
+# ============= 性能优化配置 =============
+# FFmpeg编码预设：faster(速度优先) / medium(平衡) / slow(质量优先)
+FFMPEG_PRESET = "faster"
+
+# 是否启用硬件加速编码（需要硬件支持）
+ENABLE_HARDWARE_ENCODING = True
+
+# 批处理大小：同时处理的帧数（越大GPU利用率越高，但内存占用也越大）
+BATCH_SIZE = 8
+
+# 跳帧检测间隔：每N帧检测一次水印（1=每帧检测，3=每3帧检测一次）
+DETECTION_INTERVAL = 3
+
+# 是否启用单次遍历优化（边检测边处理，避免重复解码）
+ENABLE_SINGLE_PASS = True
+
+# 是否只处理水印区域（而不是整帧），大幅提升性能
+PROCESS_REGION_ONLY = True
+
+# 处理区域的边距（像素），增加边距可以让过渡更自然
+REGION_MARGIN = 30
+
+# 检测失败后继续使用上一个bbox的最大帧数（0=无限制，一直使用最后的bbox）
+MAX_FRAMES_WITHOUT_DETECTION = 0  # 0表示无限制，推荐设置
+
+
+# ============= 数据库配置 =============
+# MySQL 数据库配置
+MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER = os.getenv("MYSQL_USER", "root")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "hkgai@123")
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "sora_watermark_cleaner")
+
+# 数据库类型配置（sqlite 或 mysql）
+DATABASE_TYPE = os.getenv("DATABASE_TYPE", "mysql")  # 默认使用 mysql
+
+# ============= 验证码配置 =============
+# 万能验证码（写死，用于开发和测试）
+UNIVERSAL_VERIFICATION_CODE = os.getenv("UNIVERSAL_VERIFICATION_CODE", "888888")
+
+# 是否启用验证码验证
+VERIFICATION_CODE_ENABLED = os.getenv("VERIFICATION_CODE_ENABLED", "true").lower() == "true"

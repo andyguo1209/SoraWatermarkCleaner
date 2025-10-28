@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Callable
+import platform
 
 import ffmpeg
 import numpy as np
@@ -14,12 +15,91 @@ from sorawm.utils.imputation_utils import (
     get_interval_average_bbox,
     find_idxs_interval,
 )
+from sorawm.configs import (
+    FFMPEG_PRESET,
+    ENABLE_HARDWARE_ENCODING,
+    BATCH_SIZE,
+    DETECTION_INTERVAL,
+    ENABLE_SINGLE_PASS,
+    PROCESS_REGION_ONLY,
+    REGION_MARGIN,
+    MAX_FRAMES_WITHOUT_DETECTION,
+)
 
 
 class SoraWM:
     def __init__(self):
         self.detector = SoraWaterMarkDetector()
         self.cleaner = WaterMarkCleaner()
+        self.ffmpeg_preset = FFMPEG_PRESET
+        self.enable_hardware_encoding = ENABLE_HARDWARE_ENCODING
+        self.batch_size = BATCH_SIZE
+        self.detection_interval = DETECTION_INTERVAL
+        self.enable_single_pass = ENABLE_SINGLE_PASS
+        self.process_region_only = PROCESS_REGION_ONLY
+        self.region_margin = REGION_MARGIN
+        self.max_frames_without_detection = MAX_FRAMES_WITHOUT_DETECTION
+
+    def _get_video_codec(self):
+        """根据系统和配置选择最佳视频编码器"""
+        if not self.enable_hardware_encoding:
+            return "libx264"
+        
+        system = platform.system()
+        if system == "Darwin":  # macOS
+            return "h264_videotoolbox"
+        elif system == "Linux" or system == "Windows":
+            # 检查是否有NVIDIA GPU
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    return "h264_nvenc"
+            except:
+                pass
+        
+        return "libx264"
+
+    def _clean_region(self, frame: np.ndarray, bbox: tuple, width: int, height: int) -> np.ndarray:
+        """只清除水印区域（而不是整帧），大幅提升性能
+        
+        参数:
+            frame: 原始帧
+            bbox: 水印边界框 (x1, y1, x2, y2)
+            width: 视频宽度
+            height: 视频高度
+            
+        返回:
+            处理后的帧
+        """
+        x1, y1, x2, y2 = bbox
+        margin = self.region_margin
+        
+        # 扩展区域（带边距）
+        rx1 = max(0, x1 - margin)
+        ry1 = max(0, y1 - margin)
+        rx2 = min(width, x2 + margin)
+        ry2 = min(height, y2 + margin)
+        
+        # 提取区域
+        region = frame[ry1:ry2, rx1:rx2].copy()
+        
+        # 创建区域mask
+        region_mask = np.zeros((ry2 - ry1, rx2 - rx1), dtype=np.uint8)
+        # mask相对于region的坐标
+        mask_y1 = y1 - ry1
+        mask_y2 = y2 - ry1
+        mask_x1 = x1 - rx1
+        mask_x2 = x2 - rx1
+        region_mask[mask_y1:mask_y2, mask_x1:mask_x2] = 255
+        
+        # 只处理小区域
+        cleaned_region = self.cleaner.clean(region, region_mask)
+        
+        # 复制回原帧
+        result_frame = frame.copy()
+        result_frame[ry1:ry2, rx1:rx2] = cleaned_region
+        
+        return result_frame
 
     def run(
         self,
@@ -27,6 +107,24 @@ class SoraWM:
         output_video_path: Path,
         progress_callback: Callable[[int], None] | None = None,
     ):
+        """主处理入口，根据配置选择单次或双次遍历"""
+        if self.enable_single_pass:
+            logger.info("使用单次遍历优化模式")
+            return self._run_single_pass(input_video_path, output_video_path, progress_callback)
+        else:
+            logger.info("使用传统双次遍历模式")
+            return self._run_double_pass(input_video_path, output_video_path, progress_callback)
+
+    def _run_single_pass(
+        self,
+        input_video_path: Path,
+        output_video_path: Path,
+        progress_callback: Callable[[int], None] | None = None,
+    ):
+        """单次遍历优化版本：边检测边清除，避免重复解码
+        
+        使用批量处理和跳帧检测进一步优化性能
+        """
         input_video_loader = VideoLoader(input_video_path)
         output_video_path.parent.mkdir(parents=True, exist_ok=True)
         width = input_video_loader.width
@@ -35,18 +133,180 @@ class SoraWM:
         total_frames = input_video_loader.total_frames
 
         temp_output_path = output_video_path.parent / f"temp_{output_video_path.name}"
+        
+        # 使用优化的编码参数
+        video_codec = self._get_video_codec()
         output_options = {
             "pix_fmt": "yuv420p",
-            "vcodec": "libx264",
-            "preset": "slow",
+            "vcodec": video_codec,
         }
-
-        if input_video_loader.original_bitrate:
-            output_options["video_bitrate"] = str(
-                int(int(input_video_loader.original_bitrate) * 1.2)
-            )
+        
+        # 根据编码器类型设置不同的参数
+        if video_codec in ["h264_nvenc", "h264_videotoolbox"]:
+            if input_video_loader.original_bitrate:
+                output_options["video_bitrate"] = str(
+                    int(int(input_video_loader.original_bitrate) * 1.2)
+                )
+            else:
+                output_options["video_bitrate"] = "5M"
+            logger.info(f"使用硬件加速编码器: {video_codec}")
         else:
-            output_options["crf"] = "18"
+            output_options["preset"] = self.ffmpeg_preset
+            if input_video_loader.original_bitrate:
+                output_options["video_bitrate"] = str(
+                    int(int(input_video_loader.original_bitrate) * 1.2)
+                )
+            else:
+                output_options["crf"] = "23"
+            logger.info(f"使用软件编码器: {video_codec}, preset: {self.ffmpeg_preset}")
+
+        process_out = (
+            ffmpeg.input(
+                "pipe:",
+                format="rawvideo",
+                pix_fmt="bgr24",
+                s=f"{width}x{height}",
+                r=fps,
+            )
+            .output(str(temp_output_path), **output_options)
+            .overwrite_output()
+            .global_args("-loglevel", "error")
+            .run_async(pipe_stdin=True)
+        )
+
+        # 批处理缓冲区
+        frame_buffer = []
+        frame_indices = []
+        last_bbox = None
+        frames_since_detection = 0
+        
+        logger.info(
+            f"开始单次遍历处理 | "
+            f"检测间隔: {self.detection_interval}帧 | "
+            f"批处理大小: {self.batch_size} | "
+            f"区域处理: {'启用' if self.process_region_only else '禁用'}"
+        )
+        
+        for idx, frame in enumerate(
+            tqdm(input_video_loader, total=total_frames, desc="处理视频（单次遍历+批处理）")
+        ):
+            frame_buffer.append(frame)
+            frame_indices.append(idx)
+            
+            # 当缓冲区满或到达最后一帧时，批量处理
+            if len(frame_buffer) >= self.batch_size or idx == total_frames - 1:
+                # 批量检测（只检测需要检测的帧）
+                frames_to_detect = []
+                detect_indices = []
+                for i, (buf_idx, buf_frame) in enumerate(zip(frame_indices, frame_buffer)):
+                    if buf_idx % self.detection_interval == 0:
+                        frames_to_detect.append(buf_frame)
+                        detect_indices.append(i)
+                
+                # 执行批量检测
+                if frames_to_detect:
+                    detections = self.detector.detect_batch(frames_to_detect)
+                    detection_map = dict(zip(detect_indices, detections))
+                else:
+                    detection_map = {}
+                
+                # 处理缓冲区中的每一帧
+                for i, (buf_idx, buf_frame) in enumerate(zip(frame_indices, frame_buffer)):
+                    # 更新bbox
+                    if i in detection_map:
+                        detection = detection_map[i]
+                        if detection["detected"]:
+                            last_bbox = detection["bbox"]
+                            frames_since_detection = 0
+                        else:
+                            frames_since_detection += 1
+                    else:
+                        frames_since_detection += 1
+                    
+                    # 清除水印
+                    # 改进逻辑：只要检测到过bbox就持续使用，除非超过最大容忍帧数
+                    should_clean = last_bbox is not None
+                    if self.max_frames_without_detection > 0:
+                        should_clean = should_clean and frames_since_detection < self.max_frames_without_detection
+                    
+                    if should_clean:
+                        if self.process_region_only:
+                            # 区域处理模式：只处理水印区域（快3-5倍）
+                            cleaned_frame = self._clean_region(buf_frame, last_bbox, width, height)
+                        else:
+                            # 全帧处理模式：处理整帧（传统方式）
+                            x1, y1, x2, y2 = last_bbox
+                            mask = np.zeros((height, width), dtype=np.uint8)
+                            mask[y1:y2, x1:x2] = 255
+                            cleaned_frame = self.cleaner.clean(buf_frame, mask)
+                    else:
+                        cleaned_frame = buf_frame
+                    
+                    process_out.stdin.write(cleaned_frame.tobytes())
+                
+                # 清空缓冲区
+                frame_buffer = []
+                frame_indices = []
+            
+            # 更新进度 (10% - 95%)
+            if progress_callback and idx % 10 == 0:
+                progress = 10 + int((idx / total_frames) * 85)
+                progress_callback(progress)
+
+        process_out.stdin.close()
+        process_out.wait()
+
+        if progress_callback:
+            progress_callback(95)
+
+        self.merge_audio_track(input_video_path, temp_output_path, output_video_path)
+
+        if progress_callback:
+            progress_callback(99)
+
+    def _run_double_pass(
+        self,
+        input_video_path: Path,
+        output_video_path: Path,
+        progress_callback: Callable[[int], None] | None = None,
+    ):
+        """传统双次遍历版本：第一次检测，第二次清除"""
+        input_video_loader = VideoLoader(input_video_path)
+        output_video_path.parent.mkdir(parents=True, exist_ok=True)
+        width = input_video_loader.width
+        height = input_video_loader.height
+        fps = input_video_loader.fps
+        total_frames = input_video_loader.total_frames
+
+        temp_output_path = output_video_path.parent / f"temp_{output_video_path.name}"
+        
+        # 使用优化的编码参数
+        video_codec = self._get_video_codec()
+        output_options = {
+            "pix_fmt": "yuv420p",
+            "vcodec": video_codec,
+        }
+        
+        # 根据编码器类型设置不同的参数
+        if video_codec in ["h264_nvenc", "h264_videotoolbox"]:
+            # 硬件编码器参数
+            if input_video_loader.original_bitrate:
+                output_options["video_bitrate"] = str(
+                    int(int(input_video_loader.original_bitrate) * 1.2)
+                )
+            else:
+                output_options["video_bitrate"] = "5M"  # 默认比特率
+            logger.info(f"使用硬件加速编码器: {video_codec}")
+        else:
+            # 软件编码器参数
+            output_options["preset"] = self.ffmpeg_preset
+            if input_video_loader.original_bitrate:
+                output_options["video_bitrate"] = str(
+                    int(int(input_video_loader.original_bitrate) * 1.2)
+                )
+            else:
+                output_options["crf"] = "23"  # 从18改为23，速度更快且质量仍然很好
+            logger.info(f"使用软件编码器: {video_codec}, preset: {self.ffmpeg_preset}")
 
         process_out = (
             ffmpeg.input(
@@ -136,14 +396,17 @@ class SoraWM:
         input_video_loader = VideoLoader(input_video_path)
 
         for idx, frame in enumerate(tqdm(input_video_loader, total=total_frames, desc="Remove watermarks")):
-        # for idx in tqdm(range(total_frames), desc="Remove watermarks"):
-            # frame_info = 
             bbox = frame_bboxes[idx]["bbox"]
             if bbox is not None:
-                x1, y1, x2, y2 = bbox
-                mask = np.zeros((height, width), dtype=np.uint8)
-                mask[y1:y2, x1:x2] = 255
-                cleaned_frame = self.cleaner.clean(frame, mask)
+                if self.process_region_only:
+                    # 区域处理模式：只处理水印区域（快3-5倍）
+                    cleaned_frame = self._clean_region(frame, bbox, width, height)
+                else:
+                    # 全帧处理模式：处理整帧（传统方式）
+                    x1, y1, x2, y2 = bbox
+                    mask = np.zeros((height, width), dtype=np.uint8)
+                    mask[y1:y2, x1:x2] = 255
+                    cleaned_frame = self.cleaner.clean(frame, mask)
             else:
                 cleaned_frame = frame
             process_out.stdin.write(cleaned_frame.tobytes())

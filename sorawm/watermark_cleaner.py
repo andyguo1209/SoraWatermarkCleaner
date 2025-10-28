@@ -30,11 +30,28 @@ class WaterMarkCleaner:
         self.inpaint_request = InpaintRequest()
 
     def clean(self, input_image: np.array, watermark_mask: np.array) -> np.array:
+        """清除单帧图像中的水印"""
         inpaint_result = self.model_manager(
             input_image, watermark_mask, self.inpaint_request
         )
         inpaint_result = cv2.cvtColor(inpaint_result, cv2.COLOR_BGR2RGB)
         return inpaint_result
+
+    def clean_batch(self, input_images: list[np.array], watermark_masks: list[np.array]) -> list[np.array]:
+        """批量清除多帧图像中的水印
+        
+        注意：当前IOPaint的model_manager不支持真正的批量处理，
+        这个方法主要是为了统一接口，实际还是逐帧处理
+        """
+        if len(input_images) != len(watermark_masks):
+            raise ValueError("输入图像和掩码数量必须相同")
+        
+        results = []
+        for image, mask in zip(input_images, watermark_masks):
+            cleaned = self.clean(image, mask)
+            results.append(cleaned)
+        
+        return results
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ class SoraWaterMarkDetector:
         self.model.eval()
 
     def detect(self, input_image: np.array):
+        """检测单帧图像中的水印"""
         # Run YOLO inference
         results = self.model(input_image, verbose=False)
         # Extract predictions from the first (and only) result
@@ -51,6 +52,42 @@ class SoraWaterMarkDetector:
             "confidence": confidence,
             "center": (int(center_x), int(center_y)),
         }
+
+    def detect_batch(self, input_images: list[np.array]):
+        """批量检测多帧图像中的水印，提高GPU利用率"""
+        if not input_images:
+            return []
+        
+        # 批量推理
+        results = self.model(input_images, verbose=False)
+        
+        detections = []
+        for result in results:
+            # Check if any detections were made
+            if len(result.boxes) == 0:
+                detections.append({
+                    "detected": False, 
+                    "bbox": None, 
+                    "confidence": None, 
+                    "center": None
+                })
+            else:
+                # Get the first detection (highest confidence)
+                box = result.boxes[0]
+                xyxy = box.xyxy[0].cpu().numpy()
+                x1, y1, x2, y2 = float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])
+                confidence = float(box.conf[0].cpu().numpy())
+                center_x = (x1 + x2) / 2
+                center_y = (y1 + y2) / 2
+                
+                detections.append({
+                    "detected": True,
+                    "bbox": (int(x1), int(y1), int(x2), int(y2)),
+                    "confidence": confidence,
+                    "center": (int(center_x), int(center_y)),
+                })
+        
+        return detections
 
 
 if __name__ == "__main__":
