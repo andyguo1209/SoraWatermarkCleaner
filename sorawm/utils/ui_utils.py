@@ -1,7 +1,9 @@
 """UI 相关的工具函数"""
+import textwrap
+from typing import Optional
+
 import requests
 import streamlit as st
-from typing import Optional
 
 
 def login_user(username: str, password: str, api_base_url: str) -> Optional[dict]:
@@ -117,22 +119,24 @@ def format_status_badge(status: str) -> str:
     
     emoji, color, text = status_colors.get(status, ("❓", "#95a5a6", "未知"))
     
-    return f"""
-    <span style='
-        background: {color}22;
-        color: {color};
-        padding: 0.3rem 0.8rem;
-        border-radius: 12px;
-        font-weight: 600;
-        font-size: 0.9rem;
-        border: 1.5px solid {color}44;
-        display: inline-flex;
-        align-items: center;
-        gap: 0.3rem;
-    '>
-        {emoji} {text}
-    </span>
-    """
+    return textwrap.dedent(
+        f"""
+        <span style='
+            background: {color}22;
+            color: {color};
+            padding: 0.3rem 0.8rem;
+            border-radius: 12px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            border: 1.5px solid {color}44;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+        '>
+            {emoji} {text}
+        </span>
+        """
+    ).strip()
 
 
 def format_datetime(dt_str: str) -> str:
@@ -152,3 +156,77 @@ def format_datetime(dt_str: str) -> str:
     except Exception:
         return dt_str
 
+
+def submit_remove_task(
+    video_bytes: bytes,
+    filename: str,
+    token: str,
+    api_base_url: str,
+    mime: str = "video/mp4",
+) -> Optional[dict]:
+    """
+    提交水印去除任务
+
+    Returns:
+        包含 task_id 的字典，失败返回 None
+    """
+    if not video_bytes:
+        st.error("未找到视频内容，无法提交任务")
+        return None
+
+    try:
+        files = {"video": (filename, video_bytes, mime)}
+        headers = {"Authorization": f"Bearer {token}"}
+        response = requests.post(
+            f"{api_base_url}/submit_remove_task",
+            headers=headers,
+            files=files,
+            timeout=30,
+        )
+        if response.status_code == 200:
+            return response.json()
+        st.error(f"任务提交失败：{response.text}")
+        return None
+    except Exception as e:
+        st.error(f"任务提交异常：{str(e)}")
+        return None
+
+
+def get_task_status(task_id: str, token: str, api_base_url: str) -> Optional[dict]:
+    """
+    查询任务状态
+    """
+    if not task_id:
+        return None
+    try:
+        response = requests.get(
+            f"{api_base_url}/get_results",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"remove_task_id": task_id},
+            timeout=10,
+        )
+        if response.status_code == 200:
+            return response.json()
+        return None
+    except Exception as e:
+        st.error(f"获取任务状态失败：{str(e)}")
+        return None
+
+
+def download_task_video(task_id: str, token: str, api_base_url: str) -> Optional[bytes]:
+    """
+    下载任务结果视频
+    """
+    try:
+        response = requests.get(
+            f"{api_base_url}/download/{task_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=60,
+        )
+        if response.status_code == 200:
+            return response.content
+        st.error(f"下载处理视频失败：{response.text}")
+        return None
+    except Exception as e:
+        st.error(f"下载处理视频异常：{str(e)}")
+        return None

@@ -1,12 +1,23 @@
+import base64
+import html
 import json
 import shutil
 import tempfile
+import time
+import textwrap
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
+
+try:
+    import cv2  # type: ignore
+    import numpy as np
+except Exception:  # pragma: no cover - optional dependency fallback
+    cv2 = None  # type: ignore
+    np = None  # type: ignore
 
 import requests
 import streamlit as st
-
 from sorawm.core import SoraWM
 from sorawm.utils.ui_utils import (
     format_datetime,
@@ -14,6 +25,9 @@ from sorawm.utils.ui_utils import (
     get_user_history,
     login_user,
     register_user,
+    submit_remove_task,
+    get_task_status,
+    download_task_video,
 )
 
 # API 配置（可通过环境变量配置）
@@ -50,8 +64,49 @@ def clear_persistent_auth() -> None:
         pass
 
 
+def extract_video_thumbnail_base64(video_bytes: bytes) -> Optional[str]:
+    """从视频字节流截取首帧并返回 base64 图片。"""
+    if not video_bytes or cv2 is None or np is None:
+        return None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
+            tmp_file.write(video_bytes)
+            tmp_path = tmp_file.name
+        capture = cv2.VideoCapture(tmp_path)
+        success, frame = capture.read()
+        capture.release()
+        Path(tmp_path).unlink(missing_ok=True)
+        if not success or frame is None:
+            return None
+        success, buffer = cv2.imencode(".jpg", frame)
+        if not success:
+            return None
+        return base64.b64encode(buffer.tobytes()).decode("utf-8")
+    except Exception:
+        return None
+
+
+@st.cache_resource
+def get_sora_wm() -> SoraWM:
+    """Lazily initialize the watermark cleaner once per process."""
+    return SoraWM()
+
+
+def _video_bytes_to_html(video_bytes: bytes, mime: str = "video/mp4") -> str:
+    """将视频字节转换为可嵌入的 HTML <video> 片段"""
+    if not video_bytes:
+        return "<div class='placeholder-box'>暂无可播放内容</div>"
+    encoded = base64.b64encode(video_bytes).decode("utf-8")
+    return (
+        f"<video controls class='compare-card__video'>"
+        f"<source src='data:{mime};base64,{encoded}' type='{mime}'>"
+        "您的浏览器暂不支持视频播放"
+        "</video>"
+    )
+
+
 def apply_custom_css():
-    """应用自定义CSS样式 - 现代科技霓虹风格"""
+    """应用自定义CSS样式 - 现代科技玻璃风格"""
     st.markdown(
         """
         <style>
@@ -83,16 +138,13 @@ def apply_custom_css():
         
         /* ============= 全局背景 ============= */
         .stApp {
-            background: linear-gradient(135deg, 
-                #0F2027 0%, 
-                #203A43 25%, 
-                #2C5364 50%,
-                #203A43 75%,
-                #0F2027 100%);
-            background-size: 400% 400%;
-            animation: gradient-shift 15s ease infinite;
+            background: linear-gradient(135deg, #1E293B 0%, #2A3B4D 100%);
+            background-size: 220% 220%;
+            animation: gradient-shift 18s ease infinite;
+            background-attachment: fixed;
             position: relative;
             overflow-x: hidden;
+            color: #E2E8F0;
         }
         
         .main {
@@ -105,74 +157,56 @@ def apply_custom_css():
         .stApp::before {
             content: '';
             position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
+            inset: 0;
             background: 
-                radial-gradient(circle at 20% 30%, rgba(0, 255, 255, 0.08) 0%, transparent 50%),
-                radial-gradient(circle at 80% 70%, rgba(138, 43, 226, 0.08) 0%, transparent 50%),
-                radial-gradient(circle at 50% 50%, rgba(255, 0, 255, 0.05) 0%, transparent 50%);
+                radial-gradient(circle at 18% 22%, rgba(62, 227, 162, 0.16), transparent 45%),
+                radial-gradient(circle at 78% 68%, rgba(56, 178, 249, 0.16), transparent 52%);
+            backdrop-filter: blur(22px);
+            opacity: 0.8;
             pointer-events: none;
-            z-index: 1;
+            z-index: 0;
         }
         
         .stApp::after {
             content: '';
             position: fixed;
-            width: 200%;
-            height: 200%;
-            top: -50%;
-            left: -50%;
-            background: 
-                linear-gradient(45deg, transparent 30%, rgba(0, 255, 255, 0.03) 50%, transparent 70%),
-                linear-gradient(-45deg, transparent 30%, rgba(138, 43, 226, 0.03) 50%, transparent 70%);
-            animation: rotate-gradient 20s linear infinite;
+            inset: 0;
+            background: rgba(8, 15, 27, 0.35);
+            mix-blend-mode: soft-light;
             pointer-events: none;
-            z-index: 1;
+            z-index: 0;
         }
         
         .stApp > div {
             position: relative;
-            z-index: 2;
+            z-index: 1;
         }
         
         /* ============= 标题样式 ============= */
         .main-title {
             text-align: center;
-            background: linear-gradient(135deg, 
-                #FFFFFF 0%, 
-                #00FFFF 25%, 
-                #FF00FF 50%, 
-                #00FFFF 75%, 
-                #FFFFFF 100%);
-            background-size: 200% 200%;
+            font-size: 3.6rem;
+            font-weight: 800;
+            margin-bottom: 1rem;
+            letter-spacing: 0.04em;
+            background: linear-gradient(135deg, #5FFFE5 0%, #6BC5FF 40%, #8A5CFF 80%, #5FFFE5 100%);
+            background-size: 300% 300%;
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
-            font-size: 5rem;
-            font-weight: 900;
-            margin-bottom: 1rem;
-            letter-spacing: -2px;
-            text-shadow: 0 0 80px rgba(0, 255, 255, 0.5);
-            animation: float 3s ease-in-out infinite, gradient-shift 5s ease infinite;
-            filter: drop-shadow(0 0 30px rgba(0, 255, 255, 0.4));
+            text-shadow: 0 20px 32px rgba(6, 17, 34, 0.45);
+            animation: gradient-shift 10s linear infinite, glow-pulse 3s ease-in-out infinite;
         }
         
         .subtitle {
             text-align: center;
-            background: linear-gradient(90deg, 
-                rgba(255, 255, 255, 0.9), 
-                rgba(0, 255, 255, 0.9), 
-                rgba(255, 255, 255, 0.9));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            font-size: 1.4rem;
+            font-size: 1.1rem;
             margin-bottom: 3rem;
-            font-weight: 300;
-            letter-spacing: 4px;
+            font-weight: 400;
+            letter-spacing: 0.28em;
             text-transform: uppercase;
-            text-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
+            color: rgba(226, 232, 240, 0.65);
+            animation: float 4.5s ease-in-out infinite;
         }
         
         /* ============= 卡片容器 ============= */
@@ -229,6 +263,21 @@ def apply_custom_css():
             border: 1px solid rgba(255, 255, 255, 0.15);
             margin: 2rem 0;
             transition: all 0.4s ease;
+            position: relative;
+            overflow: hidden;
+            animation: float 6s ease-in-out infinite;
+        }
+        
+        .upload-section::after {
+            content: '';
+            position: absolute;
+            inset: -2px;
+            border-radius: inherit;
+            background: linear-gradient(135deg, rgba(95, 255, 245, 0.15), rgba(111, 148, 255, 0.08), rgba(140, 89, 255, 0.1));
+            mix-blend-mode: screen;
+            opacity: 0.6;
+            animation: glow-pulse 4s ease-in-out infinite;
+            pointer-events: none;
         }
         
         .upload-section:hover {
@@ -259,6 +308,9 @@ def apply_custom_css():
             position: relative !important;
             overflow: hidden !important;
             box-shadow: inset 0 0 50px rgba(255, 255, 255, 0.02) !important;
+            background-image: linear-gradient(120deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0) 60%);
+            background-size: 300% 300%;
+            animation: shimmer 12s linear infinite;
         }
         
         [data-testid="stFileUploaderDropzone"]::before {
@@ -1180,6 +1232,14 @@ def render_login_page():
                 """,
                 unsafe_allow_html=True,
             )
+            if st.session_state.get("processed_video"):
+                st.download_button(
+                    label="⬇️ 下载处理后的视频",
+                    data=st.session_state.processed_video,
+                    file_name=st.session_state.get("processed_filename", "cleaned_video.mp4"),
+                    mime="video/mp4",
+                    use_container_width=True,
+                )
 
     with tab2:
         form_col, info_col = st.columns([1.05, 0.95], gap="large")
@@ -1331,17 +1391,6 @@ def render_history_page():
         st.rerun()
         return
 
-    # 页面标题
-    st.markdown(
-        """
-        <div class='main-title' style='font-size: 4.5rem; margin-top: 2rem;'>📋 处理历史</div>
-        <div class='subtitle' style='font-size: 1.2rem; letter-spacing: 3px; margin-bottom: 3rem;'>
-            查看您的所有视频处理记录
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
     # 获取历史记录
     with st.spinner("正在加载历史记录..."):
         history_data = get_user_history(st.session_state.user_token, API_BASE_URL)
@@ -1350,155 +1399,971 @@ def render_history_page():
         st.warning("⚠️ 无法获取历史记录")
         return
 
-    total = history_data.get("total", 0)
     tasks = history_data.get("tasks", [])
+    completed_tasks = [task for task in tasks if task.get("status") == "FINISHED"]
 
-    # 显示统计信息
-    col1, col2, col3, col4 = st.columns(4)
+    st.markdown(
+        """
+        <style>
+        .history-wrapper {
+            position: relative;
+            width: min(1240px, 100%);
+            margin: 0 auto;
+            padding: 48px 24px 32px;
+            z-index: 1;
+            overflow: hidden;
+            border-radius: 28px;
+            margin-bottom: 36px;
+        }
+        
+        .history-wrapper::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: 28px;
+            background:
+                radial-gradient(circle at 12% 18%, rgba(94, 234, 212, 0.16), transparent 55%),
+                radial-gradient(circle at 84% 72%, rgba(59, 130, 246, 0.12), transparent 58%);
+            opacity: 0.9;
+            pointer-events: none;
+            z-index: -1;
+        }
+        
+        .history-wrapper::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: 28px;
+            background: linear-gradient(135deg, rgba(9, 17, 28, 0.82) 0%, rgba(18, 32, 46, 0.9) 100%);
+            box-shadow: 0 24px 64px rgba(2, 12, 32, 0.5);
+            z-index: -2;
+        }
+        
+        .history-header {
+            text-align: center;
+            color: #E2E8F0;
+        }
+        
+        .history-header__title {
+            margin: 0;
+            font-size: 2.4rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            background: linear-gradient(135deg, #3EE3A2 0%, #60A5FA 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .history-header__subtitle {
+            margin-top: 8px;
+            color: rgba(226, 232, 240, 0.7);
+            font-size: 0.95rem;
+            letter-spacing: 0.06em;
+        }
+        
+        .history-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 18px;
+        }
+        
+        .history-summary__card {
+            position: relative;
+            background: linear-gradient(140deg, rgba(21, 36, 58, 0.82), rgba(14, 26, 44, 0.9));
+            border: 1px solid rgba(94, 234, 212, 0.18);
+            border-radius: 20px;
+            padding: 22px;
+            box-shadow: 0 16px 40px rgba(2, 12, 32, 0.4);
+            overflow: hidden;
+        }
+        
+        .history-summary__card::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(140deg, rgba(94, 234, 212, 0.15), transparent 60%);
+            mask-image: radial-gradient(circle at top left, rgba(0, 0, 0, 0.8), transparent 65%);
+            pointer-events: none;
+        }
+        
+        .history-summary__label {
+            font-size: 0.9rem;
+            color: rgba(226, 232, 240, 0.68);
+            text-transform: uppercase;
+            letter-spacing: 0.24em;
+        }
+        
+        .history-summary__value {
+            margin-top: 14px;
+            font-size: 2.4rem;
+            font-weight: 700;
+            color: #F8FAFC;
+            letter-spacing: 0.04em;
+        }
+        
+        .history-summary__trend {
+            margin-top: 12px;
+            font-size: 0.85rem;
+            color: rgba(94, 234, 212, 0.85);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 999px;
+            background: rgba(94, 234, 212, 0.12);
+            border: 1px solid rgba(94, 234, 212, 0.18);
+        }
+        
+        .history-section-title {
+            margin: 12px 0 0;
+            font-size: 1.05rem;
+            font-weight: 600;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: rgba(226, 232, 240, 0.72);
+        }
+        
+        .history-tabs-hint {
+            font-size: 0.82rem;
+            color: rgba(148, 163, 184, 0.75);
+            margin-top: 4px;
+            margin-bottom: 12px;
+        }
+        
+        div[data-testid="stTabs"] {
+            width: min(1240px, calc(100% - 48px));
+            margin: 0 auto 48px;
+            background: rgba(15, 27, 44, 0.72);
+            border-radius: 24px;
+            border: 1px solid rgba(148, 163, 184, 0.12);
+            box-shadow: 0 18px 40px rgba(2, 12, 32, 0.45);
+            backdrop-filter: blur(16px);
+            padding: 20px 24px;
+        }
+        
+        div[data-testid="stTabs"]::before {
+            content: "任务列表";
+            display: block;
+            margin-bottom: 14px;
+            font-size: 0.82rem;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: rgba(226, 232, 240, 0.58);
+        }
+
+        div[data-testid="stTabs"] button[role="tab"] {
+            font-size: 0.95rem;
+            letter-spacing: 0.08em;
+        }
+        
+        .history-card {
+            position: relative;
+            margin-bottom: 26px;
+            border-radius: 26px;
+            background: linear-gradient(135deg, rgba(34, 211, 238, 0.12), rgba(59, 130, 246, 0.08));
+            box-shadow: 0 18px 44px rgba(14, 116, 144, 0.22);
+            padding: 8px;
+        }
+        
+        .history-card__body {
+            position: relative;
+            background: linear-gradient(135deg, rgba(10, 19, 32, 0.96), rgba(4, 14, 26, 0.96));
+            border-radius: 20px;
+            padding: 28px 32px;
+            display: grid;
+            grid-template-columns: 120px minmax(0, 1fr);
+            gap: 32px;
+            border: 1px solid rgba(45, 212, 191, 0.18);
+            align-items: center;
+        }
+        
+        .history-card__body::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: linear-gradient(120deg, rgba(45, 212, 191, 0.16), transparent 65%);
+            opacity: 0.7;
+            pointer-events: none;
+        }
+        
+        .history-card__thumb {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 1 / 1;
+            border-radius: 22px;
+            overflow: hidden;
+            border: 2px solid rgba(45, 212, 191, 0.28);
+            box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.12), inset 0 0 20px rgba(45, 212, 191, 0.35);
+            background: linear-gradient(135deg, rgba(7, 18, 33, 0.92), rgba(2, 12, 24, 0.96));
+        }
+        
+        .history-card__thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            object-position: center;
+            display: block;
+        }
+        
+        .history-card__thumb-placeholder {
+            width: 100%;
+            height: 100%;
+            display: grid;
+            place-items: center;
+            background: radial-gradient(circle at 50% 30%, rgba(34, 211, 238, 0.3), rgba(7, 15, 28, 0.96));
+        }
+        
+        .history-card__thumb-placeholder span {
+            font-size: 2rem;
+            color: rgba(56, 189, 248, 0.85);
+        }
+        
+        .history-card__thumb-status {
+            position: absolute;
+            bottom: 12px;
+            right: 12px;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: rgba(34, 197, 94, 0.92);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: #04111c;
+            font-size: 1rem;
+            box-shadow: 0 0 12px rgba(34, 197, 94, 0.55);
+        }
+        
+        .history-card__main {
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            min-width: 0;
+            justify-content: center;
+            align-items: stretch;
+            margin: auto 0;
+        }
+        
+        .history-card__content {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 20px 28px;
+            align-items: center;
+            justify-items: stretch;
+        }
+        
+        .history-card__header {
+            display: flex;
+            justify-content: space-between;
+            gap: 18px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .history-card__title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: rgba(224, 231, 255, 0.96);
+            letter-spacing: 0.03em;
+            word-break: break-all;
+            line-height: 1.4;
+        }
+        
+        .history-card__status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 16px;
+            border-radius: 999px;
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            color: rgba(56, 189, 248, 0.9);
+            background: rgba(56, 189, 248, 0.16);
+            font-size: 0.84rem;
+            letter-spacing: 0.06em;
+        }
+        
+        .history-card__status.status-finished {
+            border-color: rgba(45, 212, 191, 0.4);
+            color: rgba(45, 212, 191, 0.92);
+            background: rgba(45, 212, 191, 0.16);
+            box-shadow: 0 0 14px rgba(16, 185, 129, 0.32);
+        }
+        
+        .history-card__status.status-processing,
+        .history-card__status.status-uploading,
+        .history-card__status.status-pending {
+            border-color: rgba(59, 130, 246, 0.45);
+            color: rgba(125, 211, 252, 0.95);
+            background: rgba(59, 130, 246, 0.16);
+        }
+        
+        .history-card__status.status-error {
+            border-color: rgba(248, 113, 113, 0.55);
+            color: rgba(252, 165, 165, 0.95);
+            background: rgba(248, 113, 113, 0.16);
+        }
+        
+        .history-card__timeline {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px 24px;
+            align-items: center;
+        }
+        
+        .history-card__timeline-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 14px;
+            border-radius: 16px;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(56, 189, 248, 0.18);
+            box-shadow: inset 0 0 0 1px rgba(13, 148, 136, 0.08);
+        }
+        
+        .history-card__timeline-text {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            line-height: 1.35;
+        }
+        
+        .history-card__timeline-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+            background: rgba(59, 130, 246, 0.7);
+        }
+        
+        .history-card__timeline-dot--finish {
+            box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.2);
+            background: rgba(45, 212, 191, 0.8);
+        }
+        
+        .history-card__timeline-label {
+            font-size: 0.72rem;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: rgba(148, 163, 184, 0.68);
+            line-height: 1.3;
+        }
+        
+        .history-card__timeline-value {
+            margin-top: 4px;
+            font-size: 0.9rem;
+            color: rgba(226, 232, 240, 0.9);
+            font-weight: 500;
+        }
+        
+        .history-card__info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px 20px;
+            align-items: stretch;
+        }
+        
+        .history-card__info-chip {
+            border-radius: 14px;
+            border: 1px solid rgba(71, 199, 236, 0.28);
+            background: rgba(10, 21, 34, 0.85);
+            padding: 12px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        
+        .history-card__info-label {
+            font-size: 0.75rem;
+            letter-spacing: 0.14em;
+            color: rgba(148, 163, 184, 0.7);
+            text-transform: uppercase;
+            line-height: 1.3;
+        }
+        
+        .history-card__info-value {
+            font-size: 0.95rem;
+            color: rgba(226, 232, 240, 0.92);
+            font-weight: 500;
+            word-break: break-all;
+            line-height: 1.4;
+        }
+
+        .history-card__message {
+            font-size: 0.9rem;
+            color: rgba(148, 163, 184, 0.78);
+            padding: 12px 16px;
+            border-radius: 12px;
+            background: rgba(15, 23, 42, 0.7);
+            border: 1px solid rgba(59, 130, 246, 0.18);
+            margin-top: 8px;
+        }
+        
+        .history-card__message.history-card__message--success {
+            color: rgba(240, 253, 250, 0.96);
+            background: linear-gradient(135deg, rgba(34, 197, 94, 0.18), rgba(16, 185, 129, 0.24));
+            border-color: rgba(16, 185, 129, 0.45);
+            box-shadow: 0 10px 30px rgba(16, 185, 129, 0.22);
+        }
+        
+        .history-card__message.history-card__message--error {
+            color: rgba(252, 165, 165, 0.95);
+            background: rgba(239, 68, 68, 0.18);
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+        
+        .history-card__divider {
+            width: 100%;
+            height: 1px;
+            margin: 16px 0 12px;
+            background: linear-gradient(90deg, rgba(56, 189, 248, 0), rgba(56, 189, 248, 0.45), rgba(56, 189, 248, 0));
+        }
+        
+        .history-card__actions {
+            display: flex;
+            justify-content: center;
+            gap: 18px;
+            flex-wrap: wrap;
+            padding-top: 6px;
+        }
+
+        .history-card__actions .stButton > button,
+        .history-card__actions [data-testid="stDownloadButton"] > div > button {
+            width: 100%;
+            max-width: 220px;
+            padding: 14px 24px;
+            border-radius: 16px;
+            font-weight: 600;
+            letter-spacing: 0.12em;
+            text-transform: none;
+            transition: all 0.25s ease;
+            border: 1.5px solid rgba(56, 189, 248, 0.32);
+            background: rgba(8, 19, 32, 0.92);
+            color: rgba(56, 189, 248, 0.92);
+            box-shadow: inset 0 0 0 0 rgba(56, 189, 248, 0.4);
+        }
+        
+        .history-card__actions [data-testid="column"] {
+            flex: 0 0 auto !important;
+            display: flex;
+            justify-content: center;
+        }
+        
+        .history-card__actions [data-testid="column"] > div {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+        }
+        
+        .history-card__actions .stButton > button:hover,
+        .history-card__actions [data-testid="stDownloadButton"] > div > button:hover {
+            transform: translateY(-1px);
+            box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.5), 0 12px 28px rgba(56, 189, 248, 0.28);
+        }
+        
+        .history-card__actions .stButton:nth-child(1) > button {
+            background: rgba(8, 19, 32, 0.96);
+        }
+        
+        .history-card__actions .stButton:nth-child(2) > button,
+        .history-card__actions [data-testid="stDownloadButton"] > div > button {
+            background: linear-gradient(135deg, rgba(56, 189, 248, 0.95), rgba(16, 185, 129, 0.95));
+            color: rgba(4, 12, 24, 0.98);
+            border: none;
+        }
+        
+        .history-empty {
+            padding: 48px 32px;
+            text-align: center;
+            color: rgba(226, 232, 240, 0.75);
+            border-radius: 16px;
+            border: 1px dashed rgba(148, 163, 184, 0.35);
+            background: rgba(15, 27, 44, 0.6);
+        }
+        
+        .history-empty__icon {
+            font-size: 3rem;
+            margin-bottom: 8px;
+            opacity: 0.65;
+        }
+        
+        .history-actions__hint {
+            padding: 10px 12px;
+            font-size: 0.82rem;
+            color: rgba(148, 163, 184, 0.75);
+            border-radius: 12px;
+            border: 1px dashed rgba(94, 234, 212, 0.25);
+            text-align: center;
+            margin-top: 12px;
+        }
+        
+        .history-preview {
+            margin-top: 18px;
+            border-radius: 18px;
+            overflow: hidden;
+            border: 1px solid rgba(94, 234, 212, 0.18);
+            box-shadow: 0 16px 32px rgba(2, 12, 32, 0.55);
+        }
+        
+        .history-modal {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+        
+        .history-modal__backdrop {
+            position: absolute;
+            inset: 0;
+            background: rgba(4, 12, 24, 0.78);
+            backdrop-filter: blur(14px);
+        }
+        
+        .history-modal__content {
+            position: relative;
+            width: min(860px, calc(100% - 32px));
+            max-height: calc(100% - 120px);
+            background: linear-gradient(135deg, rgba(6, 18, 32, 0.92), rgba(2, 10, 22, 0.94));
+            border-radius: 28px;
+            padding: 28px 32px 36px;
+            border: 1px solid rgba(0, 255, 170, 0.22);
+            box-shadow: 0 28px 64px rgba(0, 0, 0, 0.45);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+        
+        .history-modal__title {
+            font-size: 1.2rem;
+            color: rgba(226, 232, 240, 0.94);
+            letter-spacing: 0.04em;
+        }
+        
+        .history-modal__video {
+            border-radius: 18px;
+            overflow: hidden;
+            border: 1px solid rgba(94, 234, 212, 0.18);
+            box-shadow: inset 0 0 0 1px rgba(94, 234, 212, 0.08);
+        }
+        
+        .history-modal__footer {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 12px;
+        }
+        
+        .history-modal__footer button {
+            padding: 10px 22px;
+            border-radius: 999px;
+            background: linear-gradient(135deg, rgba(14, 165, 233, 0.82), rgba(56, 189, 248, 0.82));
+            color: rgba(5, 15, 28, 0.95);
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            box-shadow: 0 12px 30px rgba(56, 189, 248, 0.28);
+        }
+        
+        .history-modal__footer button:hover {
+            filter: brightness(1.05);
+        }
+        
+        @media (max-width: 768px) {
+            .history-wrapper {
+                width: calc(100% - 24px);
+                padding: 28px 16px 24px;
+                border-radius: 18px;
+            }
+            
+            div[data-testid="stTabs"] {
+                width: calc(100% - 24px);
+                margin: 0 auto 32px;
+                padding: 16px;
+                border-radius: 18px;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # 计算统计信息
+    total_tasks = len(tasks)
+    completed_count = len(completed_tasks)
+    active_tasks = [task for task in tasks if task.get("status") in {"UPLOADING", "PROCESSING"}]
+    error_tasks = [task for task in tasks if task.get("status") == "ERROR"]
+    completion_rate = int(round((completed_count / total_tasks) * 100)) if total_tasks else 0
+    completion_rate = max(0, min(completion_rate, 100))
     
-    finished_count = sum(1 for t in tasks if t["status"] == "FINISHED")
-    processing_count = sum(1 for t in tasks if t["status"] in ["UPLOADING", "PROCESSING"])
-    error_count = sum(1 for t in tasks if t["status"] == "ERROR")
-
-    with col1:
-        st.markdown(
-            f"""
-            <div style='background: rgba(46, 204, 113, 0.15); 
-                 border-radius: 16px; 
-                 padding: 1.5rem; 
-                 text-align: center;
-                 border: 2px solid rgba(46, 204, 113, 0.3);'>
-                <div style='font-size: 2.5rem; margin-bottom: 0.5rem;'>✅</div>
-                <div style='font-size: 2rem; font-weight: 800; color: #2ecc71;'>{finished_count}</div>
-                <div style='color: rgba(255, 255, 255, 0.7); font-size: 0.9rem; margin-top: 0.3rem;'>已完成</div>
+    summary_html = textwrap.dedent(
+        f"""
+        <div class='history-summary'>
+            <article class='history-summary__card'>
+                <div class='history-summary__label'>总任务</div>
+                <div class='history-summary__value'>{total_tasks}</div>
+                <div class='history-summary__trend'>📈 完成率 {completion_rate}%</div>
+            </article>
+            <article class='history-summary__card'>
+                <div class='history-summary__label'>已完成</div>
+                <div class='history-summary__value'>{completed_count}</div>
+                <div class='history-summary__trend'>✅ 等待下载的成果</div>
+            </article>
+            <article class='history-summary__card'>
+                <div class='history-summary__label'>进行中</div>
+                <div class='history-summary__value'>{len(active_tasks)}</div>
+                <div class='history-summary__trend'>⏳ 正在排队或处理</div>
+            </article>
+            <article class='history-summary__card'>
+                <div class='history-summary__label'>失败</div>
+                <div class='history-summary__value'>{len(error_tasks)}</div>
+                <div class='history-summary__trend'>⚠️ 需要关注的任务</div>
+            </article>
+        </div>
+        """
+    ).strip()
+    header_block_html = textwrap.dedent(
+        f"""
+        <div class='history-wrapper'>
+            <div class='history-header'>
+                <h1 class='history-header__title'>📚 任务历史中心</h1>
+                <p class='history-header__subtitle'>按任务状态快速总览，按需加载结果减少等待时间</p>
             </div>
-            """,
-            unsafe_allow_html=True
-        )
+            {summary_html}
+        </div>
+        """
+    ).strip()
+    st.markdown(header_block_html, unsafe_allow_html=True)
+    modal_placeholder = st.empty()
 
-    with col2:
-        st.markdown(
-            f"""
-            <div style='background: rgba(243, 156, 18, 0.15); 
-                 border-radius: 16px; 
-                 padding: 1.5rem; 
-                 text-align: center;
-                 border: 2px solid rgba(243, 156, 18, 0.3);'>
-                <div style='font-size: 2.5rem; margin-bottom: 0.5rem;'>⚙️</div>
-                <div style='font-size: 2rem; font-weight: 800; color: #f39c12;'>{processing_count}</div>
-                <div style='color: rgba(255, 255, 255, 0.7); font-size: 0.9rem; margin-top: 0.3rem;'>处理中</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+    tabs = st.tabs(
+        [
+            f"全部任务 ({total_tasks})",
+            f"已完成 ({completed_count})",
+            f"进行中 ({len(active_tasks)})",
+            f"失败 ({len(error_tasks)})",
+        ]
+    )
 
-    with col3:
-        st.markdown(
-            f"""
-            <div style='background: rgba(231, 76, 60, 0.15); 
-                 border-radius: 16px; 
-                 padding: 1.5rem; 
-                 text-align: center;
-                 border: 2px solid rgba(231, 76, 60, 0.3);'>
-                <div style='font-size: 2.5rem; margin-bottom: 0.5rem;'>❌</div>
-                <div style='font-size: 2rem; font-weight: 800; color: #e74c3c;'>{error_count}</div>
-                <div style='color: rgba(255, 255, 255, 0.7); font-size: 0.9rem; margin-top: 0.3rem;'>失败</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+    status_label_map = {
+        "FINISHED": "已完成",
+        "PROCESSING": "处理中",
+        "UPLOADING": "上传中",
+        "ERROR": "失败",
+        "PENDING": "排队中",
+    }
+    
+    if "history_modal" not in st.session_state:
+        st.session_state.history_modal = None
 
-    with col4:
-        st.markdown(
-            f"""
-            <div style='background: rgba(52, 152, 219, 0.15); 
-                 border-radius: 16px; 
-                 padding: 1.5rem; 
-                 text-align: center;
-                 border: 2px solid rgba(52, 152, 219, 0.3);'>
-                <div style='font-size: 2.5rem; margin-bottom: 0.5rem;'>📊</div>
-                <div style='font-size: 2rem; font-weight: 800; color: #3498db;'>{total}</div>
-                <div style='color: rgba(255, 255, 255, 0.7); font-size: 0.9rem; margin-top: 0.3rem;'>总任务数</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+    def _render_task_collection(task_list: Sequence[dict], *, allow_download: bool) -> None:
+        if not task_list:
+            st.markdown(
+                """
+                <div class='history-empty'>
+                    <div class='history-empty__icon'>🗂️</div>
+                    <div>这里暂时没有任务记录，提交新任务后即可查看。</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            return
 
-    st.markdown("<br><br>", unsafe_allow_html=True)
+        def format_history_timestamp(raw_value: Optional[str]) -> str:
+            if not raw_value:
+                return "--"
+            try:
+                dt_obj = datetime.fromisoformat(raw_value.replace('Z', '+00:00'))
+                date_part = dt_obj.strftime("%b %d, %Y")
+                time_part = dt_obj.strftime("%I:%M %p").lstrip("0")
+                return f"{date_part} • {time_part}"
+            except Exception:
+                return raw_value
 
-    # 显示任务列表
-    if not tasks:
-        st.info("📝 暂无处理记录")
-    else:
-        for task in tasks:
-            with st.container():
-                st.markdown(
+        def fetch_latest_video(task_identifier: str, finished_timestamp: str | None = None, *, show_spinner: bool = True) -> Optional[bytes]:
+            token = st.session_state.get("user_token")
+            if not token:
+                return None
+            cache_key = f"history_video_{task_identifier}"
+            cache_entry = st.session_state.get(cache_key)
+            if (
+                finished_timestamp
+                and isinstance(cache_entry, dict)
+                and cache_entry.get("updated_at") == finished_timestamp
+                and cache_entry.get("bytes")
+            ):
+                return cache_entry["bytes"]
+
+            def _download() -> Optional[bytes]:
+                return download_task_video(str(task_identifier), token, API_BASE_URL)
+            if show_spinner:
+                with st.spinner("正在获取最新处理结果..."):
+                    data = _download()
+            else:
+                data = _download()
+            if finished_timestamp and data:
+                st.session_state[cache_key] = {"bytes": data, "updated_at": finished_timestamp}
+            return data
+
+        for task in task_list:
+            file_name = task.get("video_filename", "output.mp4")
+            display_name_text = html.escape(file_name)
+            raw_task_id = task.get("id")
+            if raw_task_id in (None, ""):
+                raw_task_id = task.get("task_id")
+            task_id_text = html.escape(str(raw_task_id)) if raw_task_id not in (None, "") else "--"
+            status = task.get("status", "UNKNOWN")
+            status_str = str(status)
+            status_label = status_label_map.get(status_str, status_str)
+            status_class = f"status-{status_str.lower()}"
+            created_at_raw = task.get("created_at")
+            finished_at_raw = task.get("finished_at") or task.get("updated_at")
+            raw_error = task.get("message") or task.get("error_message")
+            message = html.escape(raw_error) if raw_error else ""
+            if not message:
+                if status_str == "FINISHED":
+                    message = "处理完成，可下载结果"
+                elif status_str in {"PROCESSING", "UPLOADING", "PENDING"}:
+                    message = "系统处理中，请稍候"
+                elif status_str == "ERROR":
+                    message = "任务失败，请稍后重试"
+                else:
+                    message = "等待任务状态更新"
+            thumb_data_uri = None
+            if status_str == "FINISHED" and allow_download and raw_task_id not in (None, ""):
+                thumb_key = f"history_thumb_{raw_task_id}"
+                thumb_cache = st.session_state.get(thumb_key)
+                cache_updated_at = thumb_cache.get("updated_at") if isinstance(thumb_cache, dict) else None
+                if thumb_cache and cache_updated_at == finished_at_raw:
+                    thumb_data_uri = thumb_cache.get("data")
+                else:
+                    video_bytes_for_thumb = fetch_latest_video(raw_task_id, finished_at_raw, show_spinner=False)
+                    thumb_data_uri = extract_video_thumbnail_base64(video_bytes_for_thumb) if video_bytes_for_thumb else None
+                    if thumb_data_uri:
+                        st.session_state[thumb_key] = {"data": thumb_data_uri, "updated_at": finished_at_raw}
+
+            if thumb_data_uri:
+                thumb_html = f"""
+                <div class='history-card__thumb'>
+                    <img src='data:image/jpeg;base64,{thumb_data_uri}' alt='thumbnail'>
+                    <span class='history-card__thumb-status'>✔</span>
+                </div>
+                """
+            else:
+                thumb_html = """
+                <div class='history-card__thumb'>
+                    <div class='history-card__thumb-placeholder'>
+                        <span>▶</span>
+                    </div>
+                </div>
+                """
+
+            created_at_display = format_history_timestamp(created_at_raw)
+            updated_display = format_history_timestamp(finished_at_raw) if finished_at_raw else "--"
+
+            dt_created = None
+            dt_updated = None
+            duration_display = None
+            if created_at_raw:
+                try:
+                    dt_created = datetime.fromisoformat(created_at_raw.replace("Z", "+00:00"))
+                except Exception:
+                    dt_created = None
+            if finished_at_raw:
+                try:
+                    dt_updated = datetime.fromisoformat(finished_at_raw.replace("Z", "+00:00"))
+                except Exception:
+                    dt_updated = None
+            if dt_created and dt_updated:
+                elapsed_seconds = max(int((dt_updated - dt_created).total_seconds()), 0)
+                hours, remainder = divmod(elapsed_seconds, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                duration_parts = []
+                if hours:
+                    duration_parts.append(f"{hours} 小时")
+                if minutes:
+                    duration_parts.append(f"{minutes} 分钟")
+                if seconds or not duration_parts:
+                    duration_parts.append(f"{seconds} 秒")
+                duration_display = " ".join(duration_parts)
+
+            percentage_value = task.get("percentage")
+            progress_display = None
+            if isinstance(percentage_value, (int, float)):
+                progress_display = f"{percentage_value:.0f}%"
+            elif isinstance(percentage_value, str):
+                try:
+                    progress_numeric = float(percentage_value)
+                except ValueError:
+                    progress_numeric = None
+                else:
+                    progress_display = f"{progress_numeric:.0f}%"
+
+            timeline_items = []
+            if created_at_display and created_at_display.strip():
+                timeline_items.append(
                     f"""
-                    <div style='background: rgba(255, 255, 255, 0.05); 
-                         backdrop-filter: blur(10px);
-                         border-radius: 20px; 
-                         padding: 1.5rem; 
-                         margin-bottom: 1rem;
-                         border: 1.5px solid rgba(255, 255, 255, 0.1);
-                         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);'>
-                        <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;'>
-                            <div>
-                                <div style='font-size: 1.2rem; font-weight: 700; color: #FFFFFF; margin-bottom: 0.3rem;'>
-                                    📹 {task.get('video_filename', '未知文件')}
-                                </div>
-                                <div style='color: rgba(255, 255, 255, 0.5); font-size: 0.85rem;'>
-                                    创建时间: {format_datetime(task['created_at'])}
-                                </div>
-                            </div>
-                            <div>
-                                {format_status_badge(task['status'])}
-                            </div>
-                        </div>
-                        <div style='display: flex; gap: 1rem; align-items: center;'>
-                            <div style='flex: 1;'>
-                                <div style='color: rgba(255, 255, 255, 0.6); font-size: 0.85rem; margin-bottom: 0.3rem;'>
-                                    进度: {task['percentage']}%
-                                </div>
-                                <div style='background: rgba(255, 255, 255, 0.1); 
-                                     border-radius: 10px; 
-                                     height: 8px; 
-                                     overflow: hidden;'>
-                                    <div style='background: linear-gradient(90deg, #3498db, #2ecc71); 
-                                         width: {task['percentage']}%; 
-                                         height: 100%;
-                                         border-radius: 10px;
-                                         transition: width 0.3s ease;'></div>
-                                </div>
-                            </div>
+                    <div class='history-card__timeline-item'>
+                        <div class='history-card__timeline-dot'></div>
+                        <div class='history-card__timeline-text'>
+                            <span class='history-card__timeline-label'>提交时间</span>
+                            <span class='history-card__timeline-value'>{created_at_display}</span>
                         </div>
                     </div>
-                    """,
-                    unsafe_allow_html=True
+                    """.strip()
+                )
+            if updated_display and updated_display.strip():
+                dot_class = "history-card__timeline-dot history-card__timeline-dot--finish" if status_str == "FINISHED" else "history-card__timeline-dot"
+                finish_label = "完成时间" if status_str == "FINISHED" else "最近更新"
+                timeline_items.append(
+                    f"""
+                    <div class='history-card__timeline-item'>
+                        <div class='{dot_class}'></div>
+                        <div class='history-card__timeline-text'>
+                            <span class='history-card__timeline-label'>{finish_label}</span>
+                            <span class='history-card__timeline-value'>{updated_display}</span>
+                        </div>
+                    </div>
+                    """.strip()
                 )
 
-                # 如果任务完成，显示下载按钮
-                if task["status"] == "FINISHED" and task.get("download_url"):
-                    col_dl1, col_dl2, col_dl3 = st.columns([3, 2, 3])
-                    with col_dl2:
-                        download_url = f"{API_BASE_URL}{task['download_url']}"
-                        try:
-                            response = requests.get(
-                                download_url,
-                                headers={"Authorization": f"Bearer {st.session_state.user_token}"},
-                                timeout=5
-                            )
-                            if response.status_code == 200:
-                                st.download_button(
-                                    label="⬇️ 下载视频",
-                                    data=response.content,
-                                    file_name=task.get('video_filename', 'output.mp4'),
-                                    mime="video/mp4",
-                                    key=f"download_{task['id']}",
-                                    use_container_width=True
-                                )
-                        except Exception as e:
-                            st.error(f"下载失败: {str(e)}")
+            info_items = []
+            if task_id_text != "--":
+                info_items.append(("任务 ID", task_id_text))
+            if duration_display:
+                duration_label = "处理耗时" if status_str == "FINISHED" else "已用时"
+                info_items.append((duration_label, duration_display))
+            if progress_display:
+                progress_label = "最终进度" if status_str == "FINISHED" else "当前进度"
+                info_items.append((progress_label, progress_display))
 
+            message_class = "history-card__message"
+            if status_str == "FINISHED":
+                message_class += " history-card__message--success"
+            elif status_str == "ERROR":
+                message_class += " history-card__message--error"
+
+            timeline_html = ""
+            if timeline_items:
+                timeline_html = "<div class='history-card__timeline'>" + "".join(timeline_items) + "</div>"
+
+            info_html = ""
+            if info_items:
+                info_html_parts = ["<div class='history-card__info-grid'>"]
+                for label, value in info_items:
+                    info_html_parts.append(
+                        f"<div class='history-card__info-chip'><span class='history-card__info-label'>{label}</span><span class='history-card__info-value'>{value}</span></div>"
+                    )
+                info_html_parts.append("</div>")
+                info_html = "".join(info_html_parts)
+
+            card_html_components = [
+                "<article class='history-card'>",
+                "<div class='history-card__body'>",
+                thumb_html,
+                "<div class='history-card__main'>",
+                "<header class='history-card__header'>",
+                f"<h3 class='history-card__title'>{display_name_text}</h3>",
+                f"<span class='history-card__status {status_class}'>{status_label}</span>",
+                "</header>",
+            ]
+            if timeline_html or info_html:
+                card_html_components.append("<div class='history-card__content'>")
+                if timeline_html:
+                    card_html_components.append(timeline_html)
+                if info_html:
+                    card_html_components.append(info_html)
+                card_html_components.append("</div>")
+            if message:
+                card_html_components.append(f"<div class='{message_class}'>{message}</div>")
+            if allow_download and raw_task_id not in (None, ""):
+                card_html_components.append("<div class='history-card__divider'></div>")
+            card_html_components.extend([
+                "</div>",
+                "</div>",
+                "</article>",
+            ])
+            st.markdown("".join(card_html_components), unsafe_allow_html=True)
+
+            if allow_download and raw_task_id not in (None, ""):
+                cache_key = f"history_video_{raw_task_id}"
+                video_cache_entry = st.session_state.get(cache_key)
+                cached_bytes = None
+                if isinstance(video_cache_entry, dict) and video_cache_entry.get("updated_at") == finished_at_raw:
+                    cached_bytes = video_cache_entry.get("bytes")
+
+                st.markdown("<div class='history-card__actions'>", unsafe_allow_html=True)
+                play_col, download_col = st.columns([1, 1])
+                if play_col.button("播放预览", key=f"play_{raw_task_id}"):
+                    video_bytes = cached_bytes or fetch_latest_video(raw_task_id, finished_at_raw)
+                    if video_bytes:
+                        preview_html = _video_bytes_to_html(video_bytes)
+                        st.session_state.history_modal = {
+                            "task_id": str(raw_task_id),
+                            "title": display_name_text,
+                            "html": preview_html,
+                        }
+                    else:
+                        play_col.warning("⚠️ 暂无法加载预览，请稍后再试。")
+
+                download_key = f"download_{raw_task_id}"
+                if cached_bytes:
+                    download_col.download_button(
+                        "下载",
+                        data=cached_bytes,
+                        file_name=file_name,
+                        mime="video/mp4",
+                        key=download_key,
+                    )
+                else:
+                    if download_col.button("下载结果", key=f"download_trigger_{raw_task_id}"):
+                        video_bytes = fetch_latest_video(raw_task_id, finished_at_raw)
+                        if video_bytes:
+                            st.experimental_rerun()
+                        else:
+                            download_col.warning("⚠️ 下载链接暂不可用，请稍后重试。")
+                st.markdown("</div>", unsafe_allow_html=True)
+            elif allow_download:
+                st.warning("⚠️ 暂未获取到任务 ID，无法请求下载结果，请稍后重试。")
+
+    with tabs[0]:
+        _render_task_collection(tasks, allow_download=False)
+    with tabs[1]:
+        _render_task_collection(completed_tasks, allow_download=True)
+    with tabs[2]:
+        _render_task_collection(active_tasks, allow_download=False)
+    with tabs[3]:
+        _render_task_collection(error_tasks, allow_download=False)
+
+    modal_state = st.session_state.get("history_modal")
+    if modal_state:
+        with modal_placeholder.container():
+            st.markdown(
+                """
+                <div class='history-modal'>
+                    <div class='history-modal__backdrop'></div>
+                    <div class='history-modal__content'>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f"<div class='history-modal__title'>{html.escape(modal_state.get('title', '视频预览'))}</div>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f"<div class='history-modal__video'>{modal_state.get('html', '')}</div>",
+                unsafe_allow_html=True,
+            )
+            st.markdown("<div class='history-modal__footer'>", unsafe_allow_html=True)
+            if st.button("关闭预览", key="close_history_modal"):
+                st.session_state.history_modal = None
+                st.experimental_rerun()
+            st.markdown("</div></div></div>", unsafe_allow_html=True)
+    else:
+        modal_placeholder.empty()
 
 def render_upload_page():
     """渲染上传页面"""
@@ -1561,7 +2426,19 @@ def render_upload_page():
 
         if uploaded_file is not None:
             # 保存上传的文件到session state并切换页面
+            video_bytes = uploaded_file.getvalue()
+            st.session_state.uploaded_video_bytes = video_bytes
+            st.session_state.uploaded_video_mime = uploaded_file.type or "video/mp4"
             st.session_state.uploaded_file = uploaded_file
+            st.session_state.uploaded_filename = uploaded_file.name
+            st.session_state.uploaded_filesize = getattr(uploaded_file, "size", None)
+            st.session_state.pop("processed_video", None)
+            st.session_state.pop("processed_filename", None)
+            st.session_state.current_task_id = None
+            st.session_state.current_task_status = None
+            st.session_state.is_processing_remote = False
+            st.session_state.is_processing_local = False
+            st.session_state.processing_error = None
             st.session_state.page = "process"
             st.rerun()
 
@@ -1571,137 +2448,252 @@ def render_upload_page():
 
 def render_process_page():
     """渲染处理页面 - 显示原视频和处理后的对比"""
+    token = st.session_state.get("user_token")
+    if "processing_mode" not in st.session_state:
+        st.session_state.processing_mode = "remote" if token else "local"
+
+    processing_error = st.session_state.pop("processing_error", None)
+
     uploaded_file = st.session_state.uploaded_file
+    file_size_mb = None
+    if hasattr(uploaded_file, "size") and uploaded_file.size:
+        file_size_mb = uploaded_file.size / (1024 * 1024)
 
     # 局部样式 - 科技感玻璃拟态视频卡片
     st.markdown(
         """
         <style>
-        .video-compare {
+        .process-shell {
+            max-width: 1280px;
+            margin: 0 auto;
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            column-gap: 40px;
-            align-items: stretch;
-            justify-items: center;
+            grid-template-columns: minmax(0, 2.2fr) minmax(300px, 1fr);
+            gap: 36px;
+            align-items: flex-start;
         }
 
-        .video-card {
+        .process-main {
+            display: flex;
+            flex-direction: column;
+            gap: 28px;
+        }
+
+        .process-aside {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            position: sticky;
+            top: 110px;
+        }
+
+        .compare-card {
             position: relative;
-            background: linear-gradient(145deg, rgba(18, 36, 58, 0.75), rgba(6, 18, 32, 0.66));
-            border-radius: 22px;
-            padding: 24px;
-            border: 1.6px solid rgba(116, 242, 255, 0.32);
-            box-shadow: 0 26px 60px rgba(0, 0, 0, 0.45), 0 0 40px rgba(116, 242, 255, 0.16);
+            background: linear-gradient(150deg, rgba(16, 34, 54, 0.82), rgba(7, 20, 36, 0.7));
+            border-radius: 24px;
+            padding: 24px 26px;
+            border: 1.4px solid rgba(116, 242, 255, 0.32);
+            box-shadow: 0 28px 64px rgba(0, 0, 0, 0.48), 0 0 40px rgba(116, 242, 255, 0.18);
             backdrop-filter: blur(24px);
-            overflow: hidden;
-            transition: transform 0.35s ease, box-shadow 0.35s ease;
             min-height: 520px;
+            overflow: hidden;
         }
 
-        .video-card::before {
+        .compare-card::before {
             content: "";
             position: absolute;
             inset: 0;
             background: radial-gradient(circle at 18% 22%, rgba(116, 242, 255, 0.18), transparent 58%),
-                        radial-gradient(circle at 82% 32%, rgba(138, 43, 226, 0.18), transparent 58%);
+                        radial-gradient(circle at 80% 30%, rgba(138, 43, 226, 0.18), transparent 60%);
             opacity: 0.8;
             pointer-events: none;
         }
 
-        .video-card:hover {
-            transform: translateY(-6px);
-            box-shadow: 0 35px 70px rgba(0, 0, 0, 0.55), 0 0 45px rgba(116, 242, 255, 0.22);
-        }
-
-        .video-card__header {
+        .compare-card__header {
             position: relative;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 1.2rem;
+            margin-bottom: 1rem;
             z-index: 2;
         }
 
-        .video-card__title {
-            font-size: 1.2rem;
+        .compare-card__title {
+            font-size: 1.25rem;
             font-weight: 700;
             color: #74F2FF;
             letter-spacing: 1.1px;
-            text-shadow: 0 0 16px rgba(116, 242, 255, 0.85), 0 0 8px rgba(116, 242, 255, 0.65);
+            text-shadow: 0 0 18px rgba(116, 242, 255, 0.85), 0 0 8px rgba(116, 242, 255, 0.6);
         }
 
-        .video-card__status {
+        .compare-card__status {
             font-size: 0.9rem;
             color: rgba(224, 244, 255, 0.75);
             letter-spacing: 0.6px;
         }
 
-        .video-card__body {
+        .compare-card__body {
             position: relative;
             z-index: 2;
-            height: 420px;
+            height: 600px;
+            border-radius: 18px;
+            border: 1px solid rgba(116, 242, 255, 0.24);
+            background: rgba(3, 12, 26, 0.72);
+            box-shadow: inset 0 0 26px rgba(0, 0, 0, 0.45);
             display: flex;
             align-items: center;
             justify-content: center;
-        }
-
-        .video-card__note {
-            margin-top: 1.4rem;
-            text-align: center;
-            color: rgba(224, 244, 255, 0.68);
-            font-size: 0.92rem;
-            letter-spacing: 0.5px;
-        }
-
-        .video-skeleton {
-            width: 100%;
-            height: 100%;
-            border-radius: 18px;
-            border: 1px solid rgba(116, 242, 255, 0.25);
-            background: linear-gradient(135deg, rgba(12, 28, 48, 0.6), rgba(18, 46, 72, 0.55));
-            position: relative;
             overflow: hidden;
         }
 
-        .video-skeleton::after {
-            content: "";
-            position: absolute;
-            inset: 0;
-            background: linear-gradient(120deg,
-                        rgba(255, 255, 255, 0) 0%,
-                        rgba(255, 255, 255, 0.18) 45%,
-                        rgba(255, 255, 255, 0) 80%);
-            animation: shimmer 2.2s infinite;
+        .compare-card__body video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: rgba(0, 0, 0, 0.25);
         }
 
-        .video-skeleton__content {
-            position: absolute;
-            inset: 0;
+        .compare-card__note {
+            margin-top: 1rem;
+            text-align: center;
+            font-size: 0.92rem;
+            color: rgba(224, 244, 255, 0.7);
+            letter-spacing: 0.4px;
+        }
+
+        .placeholder-box {
+            width: 100%;
+            height: 100%;
+            border-radius: 16px;
+            border: 1px dashed rgba(116, 242, 255, 0.35);
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 1rem;
-            padding: 2rem;
-            color: rgba(224, 244, 255, 0.75);
-            text-align: center;
-            z-index: 2;
+            gap: 0.8rem;
+            color: rgba(224, 244, 255, 0.65);
+            letter-spacing: 0.5px;
+            position: relative;
+            overflow: hidden;
         }
 
-        .video-skeleton__icon {
-            font-size: 3rem;
-            filter: drop-shadow(0 0 18px rgba(116, 242, 255, 0.65));
-            animation: float 3s ease-in-out infinite;
+        .placeholder-box::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(120deg, rgba(255,255,255,0) 0%, rgba(116, 242, 255, 0.18) 45%, rgba(255,255,255,0) 80%);
+            animation: shimmer 2.2s infinite;
         }
 
-        .video-skeleton__text {
+        .metric-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 18px;
+        }
+
+        .metric-card {
+            background: rgba(8, 24, 38, 0.6);
+            border-radius: 18px;
+            border: 1px solid rgba(116, 242, 255, 0.2);
+            padding: 18px 20px;
+            box-shadow: 0 14px 32px rgba(0, 0, 0, 0.38);
+            backdrop-filter: blur(18px);
+        }
+
+        .metric-card__label {
+            font-size: 0.85rem;
+            color: rgba(224, 244, 255, 0.7);
+            letter-spacing: 0.5px;
+        }
+
+        .metric-card__value {
+            margin-top: 0.4rem;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #74F2FF;
+            text-shadow: 0 0 12px rgba(116, 242, 255, 0.6);
+        }
+
+        .metric-card__desc {
+            margin-top: 0.3rem;
+            font-size: 0.8rem;
+            color: rgba(224, 244, 255, 0.6);
+        }
+
+        .action-dock {
+            background: rgba(10, 24, 40, 0.7);
+            border-radius: 22px;
+            border: 1px solid rgba(116, 242, 255, 0.22);
+            box-shadow: 0 18px 48px rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(20px);
+            padding: 24px 28px;
+        }
+
+        .analysis-card {
+            background: linear-gradient(160deg, rgba(14, 34, 54, 0.78), rgba(6, 20, 36, 0.68));
+            border-radius: 20px;
+            border: 1.3px solid rgba(116, 242, 255, 0.25);
+            box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
+            backdrop-filter: blur(20px);
+            padding: 22px 24px;
+        }
+
+        .analysis-card__title {
             font-size: 1.05rem;
+            font-weight: 700;
+            color: #74F2FF;
             letter-spacing: 0.8px;
+            margin-bottom: 0.9rem;
+            text-shadow: 0 0 12px rgba(116, 242, 255, 0.6);
         }
 
-        @keyframes shimmer {
-            0% { transform: translateX(-100%); }
-            100% { transform: translateX(100%); }
+        .analysis-card__content {
+            color: rgba(224, 244, 255, 0.78);
+            font-size: 0.92rem;
+            line-height: 1.7;
+        }
+
+        .analysis-card__content ul {
+            padding-left: 1.2rem;
+            margin: 0;
+        }
+
+        .tag-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.35rem 0.75rem;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            letter-spacing: 0.5px;
+            border: 1px solid rgba(116, 242, 255, 0.4);
+            color: rgba(224, 244, 255, 0.85);
+            background: rgba(116, 242, 255, 0.12);
+        }
+
+        @media (max-width: 1280px) {
+            .process-shell {
+                grid-template-columns: 1fr;
+            }
+            .process-aside {
+                position: static;
+                margin-top: 26px;
+            }
+        }
+
+        @media (max-width: 900px) {
+            .process-main {
+                gap: 20px;
+            }
+            .compare-card {
+                min-height: 420px;
+                padding: 20px 18px;
+            }
+            .compare-card__body {
+                height: 450px;
+            }
+            .metric-row {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
         }
         </style>
         """,
@@ -1718,114 +2710,376 @@ def render_process_page():
         """,
         unsafe_allow_html=True,
     )
-    
-    # 视频对比区域 - 协调的并排布局
-    st.markdown("<div class='video-compare'>", unsafe_allow_html=True)
 
-    # 左侧原始视频
-    st.markdown(
-        """
-        <div class="video-card">
-            <div class="video-card__header">
-                <span class="video-card__title">📹 原始视频预览</span>
-                <span class="video-card__status">源数据</span>
-            </div>
-            <div class="video-card__body">
-        """,
-        unsafe_allow_html=True,
-    )
-    st.video(uploaded_file)
-    st.markdown(
-        """
-            </div>
-            <div class="video-card__note">原始素材实时加载 · 支持 4K 分辨率</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    # 视频对比区域 - 左右并列
+    st.markdown("<section class='process-shell'>", unsafe_allow_html=True)
+    st.markdown("<div class='process-main'>", unsafe_allow_html=True)
 
-    # 右侧处理后视频
-    st.markdown(
-        """
-        <div class="video-card">
-            <div class="video-card__header">
-                <span class="video-card__title">✨ 处理后视频效果</span>
-                <span class="video-card__status">AI 输出</span>
-            </div>
-            <div class="video-card__body">
-        """,
-        unsafe_allow_html=True,
-    )
-
-    if "processed_video" not in st.session_state:
-        st.markdown(
-            """
-            <div class="video-skeleton">
-                <div class="video-skeleton__content">
-                    <div class="video-skeleton__icon">🧠</div>
-                    <div class="video-skeleton__text">AI 正在智能去除水印，请稍候</div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+    mode_labels = ["⚡ 云端极速处理", "🖥️ 本地专业模式"]
+    if token:
+        default_index = 0 if st.session_state.processing_mode == "remote" else 1
+        selected_label = st.radio(
+            "选择处理模式",
+            mode_labels,
+            index=default_index,
+            horizontal=True,
+            label_visibility="collapsed",
+            key="processing_mode_selector",
+        )
+        st.session_state.processing_mode = (
+            "remote" if selected_label == mode_labels[0] else "local"
         )
     else:
-        st.video(st.session_state.processed_video)
+        st.session_state.processing_mode = "local"
+
+    processing_mode = st.session_state.processing_mode
+
+    previous_mode = st.session_state.get("_previous_processing_mode")
+    if previous_mode and previous_mode != processing_mode:
+        if processing_mode == "remote":
+            st.session_state.is_processing_local = False
+            st.session_state.pop("sora_wm", None)
+        else:
+            st.session_state.is_processing_remote = False
+            st.session_state.current_task_id = None
+            st.session_state.current_task_status = None
+    st.session_state["_previous_processing_mode"] = processing_mode
+
+    if "is_processing_local" not in st.session_state:
+        st.session_state.is_processing_local = False
+    if "is_processing_remote" not in st.session_state:
+        st.session_state.is_processing_remote = False
+
+    def add_history_item(item: dict) -> None:
+        """添加处理历史到 session state，避免重复"""
+        history = st.session_state.get("processing_history") or []
+        task_id = item.get("task_id")
+        if task_id and any(h.get("task_id") == task_id for h in history):
+            return
+        history.insert(0, item)
+        st.session_state.processing_history = history[:10]
+
+    origin_note = "原始素材实时加载 · 支持 4K 分辨率"
+    if file_size_mb:
+        origin_note += f" · {file_size_mb:.2f} MB"
+
+    original_bytes = st.session_state.get("uploaded_video_bytes")
+    if original_bytes is None:
+        try:
+            original_bytes = uploaded_file.getvalue()
+        except Exception:
+            original_bytes = None
+    original_mime = st.session_state.get("uploaded_video_mime") or getattr(uploaded_file, "type", None) or "video/mp4"
+
+    processed_bytes = st.session_state.get("processed_video")
+    processed_mime = "video/mp4"
+
+    token = st.session_state.get("user_token")
+    if "current_task_id" not in st.session_state:
+        st.session_state.current_task_id = None
+    if "current_task_status" not in st.session_state:
+        st.session_state.current_task_status = None
+
+    task_id = st.session_state.get("current_task_id")
+    task_status = None
+    if task_id and token:
+        task_status = get_task_status(task_id, token, API_BASE_URL)
+        if task_status:
+            st.session_state.current_task_status = task_status
+            status_value = task_status.get("status")
+            if status_value == "FINISHED":
+                if processed_bytes is None:
+                    data = download_task_video(task_id, token, API_BASE_URL)
+                    if data:
+                        processed_bytes = data
+                        st.session_state.processed_video = data
+                        original_name = (
+                            st.session_state.get("uploaded_filename")
+                            or getattr(uploaded_file, "name", f"{task_id}.mp4")
+                        )
+                        st.session_state.processed_filename = (
+                            st.session_state.get("processed_filename")
+                            or f"cleaned_{original_name}"
+                        )
+                        add_history_item(
+                            {
+                                "filename": original_name,
+                                "size_mb": round(file_size_mb, 2) if file_size_mb else None,
+                                "completed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "task_id": task_id,
+                                "mode": "remote",
+                            }
+                        )
+                    else:
+                        st.session_state.processing_error = "云端视频下载失败，请稍后重试"
+                st.session_state.is_processing_remote = False
+                if st.session_state.get("processed_video"):
+                    st.session_state.current_task_id = None
+            elif status_value == "ERROR":
+                st.session_state.is_processing_remote = False
+                st.session_state.current_task_id = None
+                st.session_state.processing_error = "云端处理失败，请稍后重试"
+            else:
+                st.session_state.is_processing_remote = True
+        else:
+            st.session_state.current_task_status = None
+
+    col_before, col_after = st.columns(2, gap="large")
+
+    with col_before:
+        original_video_html = _video_bytes_to_html(original_bytes, original_mime).strip()
         st.markdown(
-            """
-            <div class="video-card__note">处理完成 · 支持实时下载与对比预览</div>
+            f"""
+            <div class='compare-card'>
+                <div class='compare-card__header'>
+                    <span class='compare-card__title'>原始画面</span>
+                    <span class='compare-card__status'>源数据</span>
+                </div>
+                <div class='compare-card__body'>
+                    {original_video_html}
+                </div>
+                <div class='compare-card__note'>{origin_note}</div>
+            </div>
             """,
             unsafe_allow_html=True,
         )
 
-    st.markdown(
-        """
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    with col_after:
+        if "processed_video" not in st.session_state or processed_bytes is None:
+            processed_html = """
+                <div class='placeholder-box'>
+                    <span style='font-size:1.1rem;'>🧠 AI 即将生成处理结果</span>
+                    <span style='font-size:0.85rem;'>点击下方按钮启动智能去水印</span>
+                </div>
+            """
+        else:
+            processed_html = _video_bytes_to_html(processed_bytes, processed_mime)
+        processed_html = processed_html.strip()
 
-    st.markdown("</div>", unsafe_allow_html=True)
-    
+        st.markdown(
+            f"""
+            <div class='compare-card'>
+                <div class='compare-card__header'>
+                    <span class='compare-card__title'>处理后效果</span>
+                    <span class='compare-card__status'>AI 输出</span>
+                </div>
+                <div class='compare-card__body'>
+                    {processed_html}
+                </div>
+                <div class='compare-card__note'>处理完成后可立即下载并对比原片</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     # 处理按钮区域 - 优化布局
-    st.markdown(
-        """
-        <div style='margin: 4rem 0 3rem 0;'>
-        """,
-        unsafe_allow_html=True,
-    )
-    
+    st.markdown("<div class='action-dock'>", unsafe_allow_html=True)
+    is_processing_local = st.session_state.get("is_processing_local", False)
+    button_section = st.container()
+    processed_ready = bool(processed_bytes)
+    is_processing_remote = st.session_state.get("is_processing_remote", False)
+    task_status = st.session_state.get("current_task_status")
+    task_id = st.session_state.get("current_task_id")
+
+    if processing_error:
+        st.markdown(
+            f"""
+            <div style='background: rgba(255, 50, 50, 0.15); 
+                 backdrop-filter: blur(10px);
+                 border-radius: 20px; 
+                 padding: 2rem; 
+                 text-align: center; 
+                 color: #FF8888; 
+                 font-weight: 700; 
+                 margin: 3rem 0;
+                 border: 2px solid rgba(255, 100, 100, 0.3);
+                 box-shadow: 0 12px 48px rgba(255, 50, 50, 0.2);'>
+                <div style='font-size: 3rem; margin-bottom: 1rem;'>❌</div>
+                <div style='font-size: 1.3rem; letter-spacing: 1px;'>处理失败：{processing_error}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     # 使用更合理的列布局，确保按钮大小适中
-    col_btn_left, col_btn_center, col_btn_right = st.columns([1.5, 3, 1.5])
+    col_btn_left, col_btn_center, col_btn_right = st.columns([1, 2, 1])
+
+
     with col_btn_center:
-        if "processed_video" not in st.session_state:
+        if processed_ready:
             st.markdown(
                 """
-                <div style='text-align: center; margin-bottom: 1.8rem;'>
-                    <p style='color: rgba(255, 255, 255, 0.7); 
-                              font-size: 1.2rem; 
-                              font-weight: 500;
+                <div style='text-align: center; margin-bottom: 2rem;'>
+                    <div style='margin-bottom: 1rem;'>
+                        <div style='font-size: 4rem; 
+                             margin-bottom: 1rem;
+                             animation: float 2s ease-in-out infinite;
+                             filter: drop-shadow(0 0 20px rgba(255, 255, 255, 0.5));'>
+                            ✅
+                        </div>
+                    </div>
+                    <p style='background: linear-gradient(135deg, #FFFFFF 0%, #E0E0E0 100%);
+                              -webkit-background-clip: text;
+                              -webkit-text-fill-color: transparent;
+                              font-size: 1.4rem; 
+                              font-weight: 700;
                               letter-spacing: 2px;
-                              text-shadow: 0 0 10px rgba(255, 255, 255, 0.2);'>
-                        🎯 准备就绪，点击开始处理
+                              margin-bottom: 0.8rem;
+                              text-shadow: 0 0 20px rgba(255, 255, 255, 0.3);'>
+                        处理完成！
+                    </p>
+                    <p style='color: rgba(255, 255, 255, 0.6); 
+                              font-size: 1.05rem; 
+                              font-weight: 400;
+                              letter-spacing: 1px; margin-bottom: 1.8rem;'>
+                        您可以在下方直接下载或继续预览结果
                     </p>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
-            
-            process_button = st.button(
-                "开始去除水印", 
-                type="primary", 
+            st.download_button(
+                label="⬇️ 下载处理后的视频",
+                data=st.session_state.processed_video,
+                file_name=st.session_state.get("processed_filename", "cleaned_video.mp4"),
+                mime="video/mp4",
                 use_container_width=True,
-                key="process_video_button"
+                key="download_processed_video_action",
             )
+            st.markdown("<div style='height: 1rem;'></div>", unsafe_allow_html=True)
+            if st.button("📚 查看历史记录", use_container_width=True, key="go_history_after_process"):
+                st.session_state.page = "history"
+                st.rerun()
+        elif processing_mode == "remote":
+            if not is_processing_remote or not task_id:
+                with button_section:
+                    st.markdown(
+                        """
+                        <div style='text-align: center; margin-bottom: 1.8rem;'>
+                            <p style='color: rgba(255, 255, 255, 0.7); 
+                                      font-size: 1.2rem; 
+                                      font-weight: 500;
+                                      letter-spacing: 2px;
+                                      text-shadow: 0 0 10px rgba(255, 255, 255, 0.2);'>
+                                ☁️ 一键提交，云端 GPU 秒级开工
+                            </p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    if st.button(
+                        "开始云端去水印",
+                        type="primary",
+                        use_container_width=True,
+                        key="process_video_remote_button",
+                    ):
+                        if not token:
+                            st.session_state.processing_error = "登录状态失效，请重新登录后再试"
+                            st.rerun()
+                        else:
+                            video_bytes = st.session_state.get("uploaded_video_bytes")
+                            if video_bytes is None:
+                                try:
+                                    video_bytes = uploaded_file.getvalue()
+                                except Exception:
+                                    video_bytes = None
+                            if not video_bytes:
+                                st.session_state.processing_error = "未检测到视频数据，无法提交任务"
+                                st.rerun()
+                            else:
+                                with st.spinner("正在提交云端任务..."):
+                                    result = submit_remove_task(
+                                        video_bytes,
+                                        st.session_state.get("uploaded_filename") or uploaded_file.name,
+                                        token,
+                                        API_BASE_URL,
+                                        original_mime,
+                                    )
+                                if result and result.get("task_id"):
+                                    st.session_state.current_task_id = result["task_id"]
+                                    st.session_state.current_task_status = {"status": "UPLOADING", "percentage": 0}
+                                    st.session_state.is_processing_remote = True
+                                    st.session_state.pop("processed_video", None)
+                                    st.session_state.pop("processed_filename", None)
+                                    st.session_state.processing_error = None
+                                    st.rerun()
+                                else:
+                                    st.session_state.processing_error = (
+                                        st.session_state.get("processing_error") or "任务提交失败，请稍后重试"
+                                    )
+                                    st.rerun()
+            else:
+                button_section.empty()
+                status = task_status or {}
+                percent = max(0, min(100, int(status.get("percentage", 0) or 0)))
+                status_label = status.get("status", "UPLOADING")
+                progress_container = st.container()
+                with progress_container:
+                    st.markdown("<div style='margin: 3rem 0;'></div>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"""
+                        <div style='text-align: center; margin-bottom: 1.5rem;'>
+                            <h4 style='font-size: 2.2rem;
+                                       font-weight: 800;
+                                       letter-spacing: 3px;
+                                       background: linear-gradient(135deg, #FFFFFF 0%, #E0E0E0 100%);
+                                       -webkit-background-clip: text;
+                                       -webkit-text-fill-color: transparent;
+                                       margin-bottom: 0.8rem;'>
+                                ☁️ 云端处理进度 - {percent}%
+                            </h4>
+                            {format_status_badge(status_label)}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    st.progress(percent / 100)
+                    st.markdown(
+                        "<p style='text-align:center; color: rgba(255,255,255,0.6); margin-top: 1rem;'>"
+                        "正在云端识别与修复，页面会自动刷新更新进度…"
+                        "</p>",
+                        unsafe_allow_html=True,
+                    )
+                if status_label not in {"FINISHED", "ERROR"}:
+                    time.sleep(2)
+                    st.rerun()
+        else:
+            if "sora_wm" not in st.session_state:
+                with st.spinner("🚀 正在加载AI模型..."):
+                    st.session_state.sora_wm = get_sora_wm()
+            if not is_processing_local:
+                with button_section:
+                    st.markdown(
+                        """
+                        <div style='text-align: center; margin-bottom: 1.8rem;'>
+                            <p style='color: rgba(255, 255, 255, 0.7); 
+                                      font-size: 1.2rem; 
+                                      font-weight: 500;
+                                      letter-spacing: 2px;
+                                      text-shadow: 0 0 10px rgba(255, 255, 255, 0.2);'>
+                                🎯 准备就绪，点击开始处理
+                            </p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
-            if process_button:
+                    if st.button(
+                        "开始本地处理",
+                        type="primary",
+                        use_container_width=True,
+                        key="process_video_local_button",
+                    ):
+                        st.session_state.is_processing_local = True
+                        st.session_state.pop("processed_video", None)
+                        st.session_state.pop("processed_filename", None)
+                        st.rerun()
+            else:
+                button_section.empty()
+
                 # 创建进度显示区域
                 st.markdown("<div style='margin: 3rem 0;'></div>", unsafe_allow_html=True)
-                
+
                 # 动态标题区域
                 title_text = st.empty()
                 progress_bar = st.progress(0)
@@ -1844,6 +3098,7 @@ def render_process_page():
                     output_path = tmp_path / f"cleaned_{uploaded_file.name}"
 
                     try:
+
                         def update_progress(progress: int):
                             # 更新标题 - 显示总体进度百分比
                             title_text.markdown(
@@ -1861,10 +3116,10 @@ def render_process_page():
                                 f"</h4>",
                                 unsafe_allow_html=True,
                             )
-                            
+
                             # 更新进度条
                             progress_bar.progress(progress / 100)
-                            
+
                             # 更新状态文本 - 显示当前步骤
                             if progress < 50:
                                 status_text.markdown(
@@ -1968,75 +3223,141 @@ def render_process_page():
                             st.session_state.processed_video = f.read()
                             st.session_state.processed_filename = f"cleaned_{uploaded_file.name}"
 
-                        # 刷新页面显示处理后的视频
+                        add_history_item(
+                            {
+                                "filename": uploaded_file.name,
+                                "size_mb": round(uploaded_file.size / (1024 * 1024), 2)
+                                if hasattr(uploaded_file, "size")
+                                else None,
+                                "completed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "mode": "local",
+                            }
+                        )
+
+                        # 处理完成后留在当前页面展示结果
+                        st.session_state.is_processing_local = False
+                        st.session_state.page = "process"
                         st.rerun()
 
                     except Exception as e:
-                        st.markdown(
-                            f"""
-                            <div style='background: rgba(255, 50, 50, 0.15); 
-                                 backdrop-filter: blur(10px);
-                                 border-radius: 20px; 
-                                 padding: 2rem; 
-                                 text-align: center; 
-                                 color: #FF8888; 
-                                 font-weight: 700; 
-                                 margin: 3rem 0;
-                                 border: 2px solid rgba(255, 100, 100, 0.3);
-                                 box-shadow: 0 12px 48px rgba(255, 50, 50, 0.2);'>
-                                <div style='font-size: 3rem; margin-bottom: 1rem;'>❌</div>
-                                <div style='font-size: 1.3rem; letter-spacing: 1px;'>处理失败：{str(e)}</div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True,
-                        )
-        else:
-            # 已处理完成，显示下载按钮
-            st.markdown(
-                """
-                <div style='text-align: center; margin-bottom: 2rem;'>
-                    <div style='margin-bottom: 1rem;'>
-                        <div style='font-size: 4rem; 
-                             margin-bottom: 1rem;
-                             animation: float 2s ease-in-out infinite;
-                             filter: drop-shadow(0 0 20px rgba(255, 255, 255, 0.5));'>
-                            ✅
-                        </div>
-                    </div>
-                    <p style='background: linear-gradient(135deg, #FFFFFF 0%, #E0E0E0 100%);
-                              -webkit-background-clip: text;
-                              -webkit-text-fill-color: transparent;
-                              font-size: 1.4rem; 
-                              font-weight: 700;
-                              letter-spacing: 2px;
-                              margin-bottom: 0.8rem;
-                              text-shadow: 0 0 20px rgba(255, 255, 255, 0.3);'>
-                        处理完成！
-                    </p>
-                    <p style='color: rgba(255, 255, 255, 0.6); 
-                              font-size: 1.05rem; 
-                              font-weight: 400;
-                              letter-spacing: 1px;'>
-                        点击下方按钮下载处理后的视频
-                    </p>
-                </div>
-                """,
-                unsafe_allow_html=True,
+                        st.session_state.is_processing_local = False
+                        st.session_state.processing_error = str(e)
+                        st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)  # close action-dock
+    st.markdown("</div>", unsafe_allow_html=True)  # close process-main
+
+    # 侧边分析面板
+    current_status = st.session_state.get("current_task_status")
+    if processed_ready:
+        status_chip = "<span class='tag-chip'>✅ 处理完成</span>"
+    elif current_status and current_status.get("status"):
+        status_chip = format_status_badge(current_status["status"])
+    elif is_processing_remote:
+        status_chip = "<span class='tag-chip'>🟡 云端处理中</span>"
+    elif is_processing_local:
+        status_chip = "<span class='tag-chip'>⚙️ 本地处理中</span>"
+    else:
+        status_chip = "<span class='tag-chip'>🟡 等待处理</span>"
+
+    history_entries = st.session_state.get("processing_history") or []
+    history_html = None
+    if history_entries:
+        items = []
+        for item in history_entries[:5]:
+            size_text = ""
+            if item.get("size_mb"):
+                size_text = f"<span style='margin-left:6px;'>{item['size_mb']} MB</span>"
+            mode = item.get("mode")
+            mode_badge = ""
+            if mode == "remote":
+                mode_badge = "<span style='margin-left:6px; color:rgba(116,242,255,0.8);'>☁️ 云端</span>"
+            elif mode == "local":
+                mode_badge = "<span style='margin-left:6px; color:rgba(224,244,255,0.6);'>🖥️ 本地</span>"
+            items.append(
+                f"<li><span style='font-weight:600;'>{item['filename']}</span>"
+                f"{mode_badge}"
+                f"<span style='margin-left:6px; color:rgba(224,244,255,0.6);'>{item['completed_at']}</span>"
+                f"{size_text}</li>"
             )
-            
-            # 下载按钮使用两列布局，使其与处理按钮大小一致
-            col_dl_left, col_dl_center, col_dl_right = st.columns([2, 2.5, 2])
-            with col_dl_center:
-                st.download_button(
-                    label="⬇️ 下载处理后的视频",
-                    data=st.session_state.processed_video,
-                    file_name=st.session_state.processed_filename,
-                    mime="video/mp4",
-                    use_container_width=True,
-                    key="download_video_button"
-                )
-    
-    st.markdown("</div>", unsafe_allow_html=True)
+        history_html = "<ul style='margin:0; padding-left:1.1rem;'>" + "".join(items) + "</ul>"
+
+    analysis_cards = [
+        textwrap.dedent(
+            """
+            <div class='analysis-card'>
+                <div class='analysis-card__title'>当前任务状态</div>
+                <div class='analysis-card__content'>
+                    <div style='display:flex; justify-content:space-between; align-items:center;'>
+                        <div style='font-size:0.95rem; color:rgba(224,244,255,0.75); letter-spacing:0.4px;'>
+                            实时监控你的处理任务进度
+                        </div>
+                        {status_chip}
+                    </div>
+                </div>
+            </div>
+            """
+        ).format(status_chip=status_chip)
+    ]
+
+    if current_status and current_status.get("status") in {"UPLOADING", "PROCESSING"}:
+        percent = current_status.get("percentage", 0)
+        analysis_cards.append(
+            textwrap.dedent(
+                f"""
+                <div class='analysis-card'>
+                    <div class='analysis-card__title'>云端进度</div>
+                    <div class='analysis-card__content'>
+                        <p style='margin-bottom:0.6rem;'>当前阶段：{current_status.get("status")}</p>
+                        <div style='background: rgba(255,255,255,0.08); border-radius: 10px; height: 10px; overflow:hidden;'>
+                            <div style='height:100%; width:{percent}%; background: linear-gradient(90deg,#74F2FF,#8A2BE2);'></div>
+                        </div>
+                        <p style='margin-top:0.6rem; font-size:0.85rem; color:rgba(224,244,255,0.65);'>
+                            进度 {percent}%，页面会自动刷新更新状态
+                        </p>
+                    </div>
+                </div>
+                """
+            )
+        )
+
+    if processed_ready:
+        analysis_cards.append(
+            textwrap.dedent(
+                """
+                <div class='analysis-card'>
+                    <div class='analysis-card__title'>AI 分析路径</div>
+                    <div class='analysis-card__content'>
+                        <ol style='margin:0; padding-left:1.1rem;'>
+                            <li>帧级水印检测与区域标注</li>
+                            <li>自适应修复（纹理补全 + 颜色重建）</li>
+                            <li>音视频同步合成与质量校验</li>
+                        </ol>
+                    </div>
+                </div>
+                """
+            )
+        )
+
+    if history_html:
+        analysis_cards.append(
+            textwrap.dedent(
+                f"""
+                <div class='analysis-card'>
+                    <div class='analysis-card__title'>最近处理记录</div>
+                    <div class='analysis-card__content'>
+                        {history_html}
+                    </div>
+                </div>
+                """
+            )
+        )
+
+    st.markdown("<aside class='process-aside'>", unsafe_allow_html=True)
+    for card in analysis_cards:
+        st.markdown(card, unsafe_allow_html=True)
+    st.markdown("</aside>", unsafe_allow_html=True)
+    st.markdown("</section>", unsafe_allow_html=True)
 
     # 页脚
     st.markdown(
@@ -2052,7 +3373,6 @@ def render_process_page():
         """,
         unsafe_allow_html=True,
     )
-
 
 def render_navigation():
     """渲染导航栏"""
@@ -2150,10 +3470,6 @@ def main():
     elif st.session_state.page == "history":
         render_history_page()
     elif st.session_state.page == "upload":
-        # 初始化 SoraWM（仅在需要时加载）
-        if "sora_wm" not in st.session_state:
-            with st.spinner("🚀 正在加载AI模型..."):
-                st.session_state.sora_wm = SoraWM()
         render_upload_page()
     elif st.session_state.page == "process":
         render_process_page()
