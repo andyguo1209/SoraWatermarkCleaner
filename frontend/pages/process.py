@@ -108,7 +108,8 @@ def render_process_page():
             position: relative;
             z-index: 2;
             aspect-ratio: 16 / 9;
-            max-height: min(420px, 60vh);
+            min-height: 360px;
+            max-height: min(520px, 72vh);
             width: 100%;
             border-radius: 18px;
             border: 1px solid rgba(116, 242, 255, 0.24);
@@ -120,11 +121,13 @@ def render_process_page():
             overflow: hidden;
         }
 
-        .compare-card__body video {
+        .compare-card__video {
             width: 100%;
             height: 100%;
+            display: block;
             object-fit: contain;
             background: rgba(0, 0, 0, 0.25);
+            border-radius: 12px;
         }
 
         .video-compare-grid {
@@ -408,47 +411,72 @@ def render_process_page():
         else:
             st.session_state.current_task_status = None
 
-    original_video_html = video_bytes_to_html(original_bytes, original_mime).strip()
-    if "processed_video" not in st.session_state or processed_bytes is None:
-        processed_html = textwrap.dedent(
-            """
-            <div class='placeholder-box'>
-                <span style='font-size:1.1rem;'>🧠 AI 即将生成处理结果</span>
-                <span style='font-size:0.85rem;'>点击下方按钮启动智能去水印</span>
-            </div>
-            """
-        ).strip()
-    else:
-        processed_html = video_bytes_to_html(processed_bytes, processed_mime).strip()
-
-    video_cards_html = textwrap.dedent(
-        f"""
-        <div class='video-compare-grid'>
-            <div class='compare-card'>
-                <div class='compare-card__header'>
-                    <span class='compare-card__title'>原始画面</span>
-                    <span class='compare-card__status'>源数据</span>
-                </div>
-                <div class='compare-card__body'>
-                    {original_video_html}
-                </div>
-                <div class='compare-card__note'>{origin_note}</div>
-            </div>
-            <div class='compare-card'>
-                <div class='compare-card__header'>
-                    <span class='compare-card__title'>处理后效果</span>
-                    <span class='compare-card__status'>AI 输出</span>
-                </div>
-                <div class='compare-card__body'>
-                    {processed_html}
-                </div>
-                <div class='compare-card__note'>处理完成后可立即下载并对比原片</div>
-            </div>
+    original_placeholder_html = textwrap.dedent(
+        """
+        <div class='placeholder-box'>
+            <span style='font-size:1.1rem;'>📼 等待视频加载</span>
+            <span style='font-size:0.85rem;'>请先上传或录制需要处理的素材</span>
         </div>
         """
     ).strip()
 
-    st.markdown(video_cards_html, unsafe_allow_html=True)
+    processed_placeholder_html = textwrap.dedent(
+        """
+        <div class='placeholder-box'>
+            <span style='font-size:1.1rem;'>🧠 AI 即将生成处理结果</span>
+            <span style='font-size:0.85rem;'>点击下方按钮启动智能去水印</span>
+        </div>
+        """
+    ).strip()
+
+    def render_compare_card(
+        title: str,
+        status_label: str,
+        *,
+        video_data: bytes | None,
+        video_mime: str | None,
+        note: str,
+        placeholder_html: str,
+    ) -> None:
+        if video_data:
+            body_html = video_bytes_to_html(video_data, video_mime or "video/mp4", css_class="compare-card__video")
+        else:
+            body_html = placeholder_html
+        card_html = textwrap.dedent(
+            f"""
+            <div class='compare-card'>
+                <div class='compare-card__header'>
+                    <span class='compare-card__title'>{title}</span>
+                    <span class='compare-card__status'>{status_label}</span>
+                </div>
+                <div class='compare-card__body'>
+                    {body_html}
+                </div>
+                <div class='compare-card__note'>{note}</div>
+            </div>
+            """
+        )
+        st.markdown(card_html, unsafe_allow_html=True)
+
+    col_original, col_processed = st.columns(2, gap="large")
+    with col_original:
+        render_compare_card(
+            "原始画面",
+            "源数据",
+            video_data=original_bytes,
+            video_mime=original_mime,
+            note=origin_note,
+            placeholder_html=original_placeholder_html,
+        )
+    with col_processed:
+        render_compare_card(
+            "处理后效果",
+            "AI 输出",
+            video_data=processed_bytes,
+            video_mime=processed_mime,
+            note="处理完成后可立即下载并对比原片",
+            placeholder_html=processed_placeholder_html,
+        )
 
     # 处理按钮区域 - 优化布局
     st.markdown("<div class='action-dock'>", unsafe_allow_html=True)

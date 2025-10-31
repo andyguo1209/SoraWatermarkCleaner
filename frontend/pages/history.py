@@ -8,7 +8,7 @@ from typing import Optional, Sequence
 import streamlit as st
 
 from frontend.config import API_BASE_URL
-from frontend.media import extract_video_thumbnail_base64, video_bytes_to_html
+from frontend.media import extract_video_thumbnail_base64
 from sorawm.utils.ui_utils import download_task_video, get_user_history
 
 
@@ -35,19 +35,37 @@ def render_history_page() -> None:
     st.markdown(
         """
         <style>
+        @keyframes history-hero-glow {
+            0%, 100% { transform: translate(-4%, -4%) scale(1); opacity: 0.85; }
+            50% { transform: translate(2%, 3%) scale(1.04); opacity: 1; }
+        }
+        @keyframes history-metric-float {
+            0%, 100% { transform: translateY(0px); box-shadow: 0 20px 45px rgba(15, 23, 42, 0.4); }
+            50% { transform: translateY(-6px); box-shadow: 0 28px 55px rgba(15, 23, 42, 0.42); }
+        }
+        @keyframes history-progress-pulse {
+            0% { box-shadow: 0 0 14px rgba(34, 211, 238, 0.45); }
+            50% { box-shadow: 0 0 25px rgba(34, 211, 238, 0.7); }
+            100% { box-shadow: 0 0 14px rgba(34, 211, 238, 0.45); }
+        }
+        .block-container,
         [data-testid="block-container"] {
-            max-width: 1000px !important;
-            padding-left: 32px !important;
-            padding-right: 32px !important;
+            max-width: 1340px !important;
+            width: 100% !important;
+            margin: 0 auto !important;
+            padding-left: 36px !important;
+            padding-right: 36px !important;
+            box-sizing: border-box !important;
         }
         @media (max-width: 980px) {
+            .block-container,
             [data-testid="block-container"] {
                 padding-left: 16px !important;
                 padding-right: 16px !important;
             }
         }
         .history-page {
-            width: min(960px, 88vw);
+            width: min(1280px, 95vw);
             margin: 0 auto;
         }
         [data-testid="stTabs"] [data-baseweb="tab-list"] {
@@ -89,21 +107,17 @@ def render_history_page() -> None:
             background: radial-gradient(circle at 18% 24%, rgba(14, 116, 144, 0.25), transparent 55%),
                         radial-gradient(circle at 82% 30%, rgba(8, 186, 199, 0.22), transparent 58%);
             opacity: 0.85;
+            animation: history-hero-glow 16s ease-in-out infinite;
             pointer-events: none;
         }
-        .history-hero__inner {
-            position: relative;
-            display: flex;
-            flex-direction: column;
-            gap: 32px;
-            z-index: 1;
-        }
         .history-hero__top {
+            position: relative;
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 32px;
             flex-wrap: wrap;
+            z-index: 1;
         }
         .history-hero__info {
             display: flex;
@@ -137,55 +151,59 @@ def render_history_page() -> None:
             line-height: 1.7;
             letter-spacing: 0.05em;
         }
-        .history-hero__progress-card {
-            flex: 0 0 320px;
+        .history-hero__summary {
+            flex: 0 0 300px;
             background: linear-gradient(135deg, rgba(6, 78, 59, 0.35), rgba(13, 148, 136, 0.25));
             border-radius: 24px;
-            padding: 24px 26px;
+            padding: 20px 22px 24px;
             border: 1px solid rgba(45, 212, 191, 0.32);
             box-shadow:
                 inset 0 0 0 1px rgba(94, 234, 212, 0.18),
                 0 20px 48px rgba(6, 78, 59, 0.35);
             color: rgba(226, 232, 240, 0.92);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
         }
-        .history-hero__progress-label {
+        .history-hero__summary-label {
             font-size: 0.9rem;
             letter-spacing: 0.38em;
             text-transform: uppercase;
             color: rgba(165, 243, 252, 0.78);
         }
-        .history-hero__progress-value {
-            margin-top: 16px;
-            font-size: 3rem;
+        .history-hero__summary-value {
+            font-size: 2.6rem;
             font-weight: 800;
             color: #5eead4;
         }
-        .history-hero__progress-bar {
-            margin-top: 18px;
+        .history-hero__progress {
+            margin-top: 4px;
             height: 10px;
             border-radius: 999px;
             background: rgba(45, 212, 191, 0.25);
             overflow: hidden;
         }
-        .history-hero__progress-bar span {
+        .history-hero__progress span {
             display: block;
             height: 100%;
             background: linear-gradient(90deg, #22d3ee, #14b8a6);
             box-shadow: 0 0 18px rgba(34, 211, 238, 0.6);
+            animation: history-progress-pulse 4s ease-in-out infinite;
         }
-        .history-hero__progress-meta {
-            margin-top: 12px;
+        .history-hero__summary-meta {
             display: flex;
             justify-content: space-between;
             font-size: 0.9rem;
             color: rgba(226, 232, 240, 0.78);
         }
-        .history-hero__stats {
+        .history-hero__metrics {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
             gap: 22px;
+            position: relative;
+            z-index: 1;
         }
-        .history-hero__stat {
+        .history-metric {
             background: linear-gradient(145deg, rgba(30, 64, 175, 0.28), rgba(46, 16, 101, 0.28));
             border-radius: 18px;
             padding: 22px 24px;
@@ -195,20 +213,25 @@ def render_history_page() -> None:
             display: flex;
             flex-direction: column;
             gap: 8px;
+            animation: history-metric-float 8s ease-in-out infinite;
         }
-        .history-hero__stat-value {
-            font-size: 1.6rem;
-            font-weight: 700;
-            color: #5eead4;
-            margin-bottom: 4px;
+        .history-metric:nth-child(2) { animation-delay: 0.8s; }
+        .history-metric:nth-child(3) { animation-delay: 1.6s; }
+        .history-metric:nth-child(4) { animation-delay: 2.4s; }
         }
-        .history-hero__stat-label {
+        .history-metric__label {
             font-size: 0.88rem;
             letter-spacing: 0.06em;
             text-transform: uppercase;
             color: rgba(226, 232, 240, 0.7);
         }
-        .history-hero__stat-hint {
+        .history-metric__value {
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: #5eead4;
+            margin-bottom: 4px;
+        }
+        .history-metric__hint {
             font-size: 0.85rem;
             color: rgba(226, 232, 240, 0.6);
         }
@@ -403,10 +426,10 @@ def render_history_page() -> None:
             color: #e2e8f0;
             margin-bottom: 1rem;
         }
-        .history-modal__video {
+        .history-modal [data-testid="stVideo"] {
             margin-bottom: 1.5rem;
         }
-        .history-modal__video video {
+        .history-modal [data-testid="stVideo"] video {
             width: 100%;
             border-radius: 18px;
         }
@@ -429,50 +452,48 @@ def render_history_page() -> None:
     hero_html = textwrap.dedent(
         f"""
         <section class='history-hero'>
-            <div class='history-hero__inner'>
-                <div class='history-hero__top'>
-                    <div class='history-hero__info'>
-                        <span class='history-hero__badge'>TASK NAVIGATOR</span>
-                        <h1 class='history-hero__title'>任务指挥中心</h1>
-                        <p class='history-hero__subtitle'>
-                            当前共 <strong>{total_tasks}</strong> 个任务，完成率 <strong>{completion_rate}%</strong>。
-                            在这里快速预览、下载最新成果，或定位需要关注的异常任务。
-                        </p>
+            <div class='history-hero__top'>
+                <div class='history-hero__info'>
+                    <span class='history-hero__badge'>TASK NAVIGATOR</span>
+                    <h1 class='history-hero__title'>任务指挥中心</h1>
+                    <p class='history-hero__subtitle'>
+                        当前共 <strong>{total_tasks}</strong> 个任务，完成率 <strong>{completion_rate}%</strong>。
+                        在这里快速预览、下载最新成果，或定位需要关注的异常任务。
+                    </p>
+                </div>
+                <div class='history-hero__summary'>
+                    <span class='history-hero__summary-label'>实时完成率</span>
+                    <span class='history-hero__summary-value'>{completion_rate}%</span>
+                    <div class='history-hero__progress'>
+                        <span style='width: {completion_rate}%;'></span>
                     </div>
-                    <div class='history-hero__progress-card'>
-                        <div class='history-hero__progress-label'>实时完成率</div>
-                        <div class='history-hero__progress-value'>{completion_rate}%</div>
-                        <div class='history-hero__progress-bar'>
-                            <span style='width: {completion_rate}%;'></span>
-                        </div>
-                        <div class='history-hero__progress-meta'>
-                            <span>正在处理 {active_count}</span>
-                            <span>失败任务 {error_count}</span>
-                        </div>
+                    <div class='history-hero__summary-meta'>
+                        <span>正在处理 <strong>{active_count}</strong></span>
+                        <span>失败任务 <strong>{error_count}</strong></span>
                     </div>
                 </div>
-                <div class='history-hero__stats'>
-                    <div class='history-hero__stat'>
-                        <div class='history-hero__stat-label'>总任务</div>
-                        <div class='history-hero__stat-value'>{total_tasks}</div>
-                        <div class='history-hero__stat-hint'>📈 完成率 {completion_rate}%</div>
-                    </div>
-                    <div class='history-hero__stat'>
-                        <div class='history-hero__stat-label'>已完成</div>
-                        <div class='history-hero__stat-value'>{completed_count}</div>
-                        <div class='history-hero__stat-hint'>✅ 可立即预览与下载</div>
-                    </div>
-                    <div class='history-hero__stat'>
-                        <div class='history-hero__stat-label'>进行中</div>
-                        <div class='history-hero__stat-value'>{active_count}</div>
-                        <div class='history-hero__stat-hint'>⏳ 后台正在排队或处理</div>
-                    </div>
-                    <div class='history-hero__stat'>
-                        <div class='history-hero__stat-label'>失败</div>
-                        <div class='history-hero__stat-value'>{error_count}</div>
-                        <div class='history-hero__stat-hint'>⚠️ 建议查看失败详情</div>
-                    </div>
-                </div>
+            </div>
+            <div class='history-hero__metrics'>
+                <article class='history-metric'>
+                    <span class='history-metric__label'>总任务</span>
+                    <span class='history-metric__value'>{total_tasks}</span>
+                    <span class='history-metric__hint'>📈 完成率 {completion_rate}%</span>
+                </article>
+                <article class='history-metric'>
+                    <span class='history-metric__label'>已完成</span>
+                    <span class='history-metric__value'>{completed_count}</span>
+                    <span class='history-metric__hint'>✅ 可立即预览与下载</span>
+                </article>
+                <article class='history-metric'>
+                    <span class='history-metric__label'>进行中</span>
+                    <span class='history-metric__value'>{active_count}</span>
+                    <span class='history-metric__hint'>⏳ 后台正在排队或处理</span>
+                </article>
+                <article class='history-metric'>
+                    <span class='history-metric__label'>失败</span>
+                    <span class='history-metric__value'>{error_count}</span>
+                    <span class='history-metric__hint'>⚠️ 建议查看失败详情</span>
+                </article>
             </div>
         </section>
         """
@@ -550,7 +571,7 @@ def render_history_page() -> None:
 
         for index, task in enumerate(task_list):
             raw_task_id = task.get("id") or task.get("task_id")
-            file_name = task.get("video_filename", "output.mp4")
+            file_name = task.get("video_filename") or "output.mp4"
             status = str(task.get("status", "UNKNOWN"))
             status_label, status_class = status_label_map.get(status, (status, "status-processing"))
             created_at_raw = task.get("created_at")
@@ -667,11 +688,10 @@ def render_history_page() -> None:
                     if st.button("播放预览", key=play_key):
                         video_bytes = fetch_latest_video(str(raw_task_id), finished_at_raw)
                         if video_bytes:
-                            preview_html = video_bytes_to_html(video_bytes)
                             st.session_state.history_modal = {
                                 "task_id": str(raw_task_id),
-                                "title": html.escape(file_name),
-                                "html": preview_html,
+                                "title": file_name or "视频预览",
+                                "video_bytes": video_bytes,
                             }
                         else:
                             warning_messages.append("⚠️ 暂无法加载预览，请稍后再试。")
@@ -733,14 +753,19 @@ def render_history_page() -> None:
             """,
             unsafe_allow_html=True,
         )
+        modal_title = str(modal_state.get("title") or "视频预览")
         st.markdown(
-            f"<div class='history-modal__title'>{html.escape(modal_state.get('title', '视频预览'))}</div>",
+            f"<div class='history-modal__title'>{html.escape(modal_title)}</div>",
             unsafe_allow_html=True,
         )
-        st.markdown(
-            f"<div class='history-modal__video'>{modal_state.get('html', '')}</div>",
-            unsafe_allow_html=True,
-        )
+        video_url = modal_state.get("video_url")
+        video_bytes = modal_state.get("video_bytes")
+        if video_url:
+            st.video(video_url)
+        elif video_bytes:
+            st.video(video_bytes)
+        else:
+            st.info("暂无可用视频预览")
         if st.button("关闭预览", key="close_history_modal"):
             st.session_state.history_modal = None
             st.rerun()

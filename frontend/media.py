@@ -6,6 +6,9 @@ import base64
 import tempfile
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
+
+from streamlit import runtime
 
 try:
     import cv2  # type: ignore
@@ -49,29 +52,42 @@ def video_url_to_html(video_url: str, mime: str = "video/mp4", css_class: str = 
     )
 
 
-def video_bytes_to_html(video_bytes: bytes, mime: str = "video/mp4") -> str:
-    """将视频字节转换为可嵌入的 HTML <video> 片段（已废弃，使用video_url_to_html替代）"""
-    # 警告：base64编码会大幅增加文件大小并导致性能问题
-    # 对于大视频，应该使用URL方式而不是base64
+def video_bytes_to_html(
+    video_bytes: bytes,
+    mime: str = "video/mp4",
+    css_class: str = "compare-card__video",
+    *,
+    autoplay: bool = False,
+    loop: bool = False,
+) -> str:
+    """将视频字节流转换为内嵌的 HTML5 video 标签。"""
     if not video_bytes:
         return "<div class='placeholder-box'>暂无可播放内容</div>"
-    
-    # 只对小文件（<5MB）使用base64，否则建议使用URL方式
-    video_size_mb = len(video_bytes) / (1024 * 1024)
-    if video_size_mb > 5:
-        return (
-            "<div class='placeholder-box'>"
-            f"⚠️ 视频文件过大（{video_size_mb:.1f}MB），无法使用base64方式。请使用URL方式播放。"
-            "</div>"
-        )
-    
-    encoded = base64.b64encode(video_bytes).decode("utf-8")
+    media_url: str | None = None
+    if runtime.exists():
+        try:
+            media_url = runtime.get_instance().media_file_mgr.add(
+                video_bytes, mime, f"compare-card/{uuid4().hex}"
+            )
+        except Exception:
+            media_url = None
+    try:
+        encoded = base64.b64encode(video_bytes).decode("utf-8")
+    except Exception:
+        return "<div class='placeholder-box'>暂无法渲染视频</div>"
+    autoplay_attr = " autoplay muted" if autoplay else ""
+    loop_attr = " loop" if loop else ""
+    source_attr = (
+        f"<source src='{media_url}' type='{mime}'>"
+        if media_url
+        else f"<source src='data:{mime};base64,{encoded}' type='{mime}'>"
+    )
     return (
-        f"<video controls class='compare-card__video'>"
-        f"<source src='data:{mime};base64,{encoded}' type='{mime}'>"
+        f"<video controls class='{css_class}'{autoplay_attr}{loop_attr}>"
+        f"{source_attr}"
         "您的浏览器暂不支持视频播放"
         "</video>"
     )
 
 
-__all__ = ["extract_video_thumbnail_base64", "video_bytes_to_html", "video_url_to_html"]
+__all__ = ["extract_video_thumbnail_base64", "video_url_to_html", "video_bytes_to_html"]
