@@ -53,6 +53,14 @@ def render_history_page() -> None:
             50% { box-shadow: 0 0 25px rgba(34, 211, 238, 0.7); }
             100% { box-shadow: 0 0 14px rgba(34, 211, 238, 0.45); }
         }
+        @keyframes history-card-glow {
+            0%, 100% { opacity: 0.5; transform: translate(-50%, -50%) rotate(0deg); }
+            50% { opacity: 0.8; transform: translate(-45%, -45%) rotate(12deg); }
+        }
+        @keyframes history-card-sheen {
+            0% { transform: translateX(-120%) skewX(-18deg); }
+            100% { transform: translateX(220%) skewX(-18deg); }
+        }
         .block-container,
         [data-testid="block-container"] {
             max-width: 1340px !important;
@@ -254,6 +262,37 @@ def render_history_page() -> None:
                 inset 0 0 0 1px rgba(148, 197, 255, 0.05),
                 0 34px 70px rgba(8, 24, 48, 0.62);
             overflow: hidden;
+            transition: transform 0.35s ease, box-shadow 0.4s ease;
+        }
+        .history-card::before,
+        .history-card::after {
+            content: "";
+            position: absolute;
+            inset: -20%;
+            border-radius: inherit;
+            background: radial-gradient(circle at 50% 50%, rgba(96, 205, 255, 0.18), transparent 62%);
+            opacity: 0.45;
+            filter: blur(0);
+            pointer-events: none;
+            transition: opacity 0.4s ease;
+        }
+        .history-card::before {
+            animation: history-card-glow 10s ease-in-out infinite;
+        }
+        .history-card::after {
+            background: linear-gradient(120deg, rgba(255, 255, 255, 0.35), rgba(96, 205, 255, 0.12), transparent 55%);
+            mix-blend-mode: screen;
+            opacity: 0.0;
+        }
+        .history-card:hover {
+            transform: translateY(-6px);
+            box-shadow:
+                inset 0 0 0 1px rgba(148, 197, 255, 0.08),
+                0 44px 90px rgba(8, 24, 58, 0.75);
+        }
+        .history-card:hover::after {
+            opacity: 0.35;
+            animation: history-card-sheen 2.8s ease-out;
         }
         .history-card__layout {
             position: relative;
@@ -287,6 +326,16 @@ def render_history_page() -> None:
             align-items: center;
             justify-content: center;
             overflow: hidden;
+        }
+        .history-card__preview::after {
+            content: "";
+            position: absolute;
+            inset: 14%;
+            border-radius: 20px;
+            border: 1px solid rgba(94, 234, 255, 0.25);
+            box-shadow: 0 0 32px rgba(94, 234, 255, 0.18);
+            animation: history-card-glow 14s ease-in-out infinite;
+            pointer-events: none;
         }
         .history-card__preview img {
             width: 100%;
