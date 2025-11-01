@@ -165,10 +165,10 @@ def render_history_page() -> None:
             letter-spacing: 0.05em;
         }
         .history-hero__summary {
-            flex: 0 0 300px;
+            flex: 0 0 360px;
             background: linear-gradient(135deg, rgba(6, 78, 59, 0.35), rgba(13, 148, 136, 0.25));
             border-radius: 24px;
-            padding: 20px 22px 24px;
+            padding: 24px 28px 28px;
             border: 1px solid rgba(45, 212, 191, 0.32);
             box-shadow:
                 inset 0 0 0 1px rgba(94, 234, 212, 0.18),
@@ -343,6 +343,15 @@ def render_history_page() -> None:
             border-radius: 24px;
             object-fit: cover;
             box-shadow: 0 18px 45px rgba(0, 0, 0, 0.55);
+        }
+        .history-card__preview video {
+            width: 100%;
+            height: 100%;
+            border-radius: 24px;
+            object-fit: cover;
+            box-shadow: 0 18px 45px rgba(0, 0, 0, 0.55);
+            display: block;
+            background: rgba(15, 23, 42, 0.75);
         }
         .history-card__preview-placeholder {
             font-size: 3.6rem;
@@ -579,48 +588,10 @@ def render_history_page() -> None:
             font-size: 2.6rem;
             margin-bottom: 0.8rem;
         }
-        .history-modal {
-            position: fixed;
-            inset: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background: rgba(15, 23, 42, 0.75);
-            backdrop-filter: blur(6px);
-            z-index: 999;
-        }
-        .history-modal__content {
-            width: min(840px, 88vw);
-            background: linear-gradient(135deg, rgba(12, 32, 48, 0.95), rgba(6, 16, 28, 0.9));
-            border-radius: 24px;
-            padding: 28px 32px;
-            border: 1px solid rgba(59, 130, 246, 0.35);
-            box-shadow: 0 24px 64px rgba(15, 23, 42, 0.5);
-        }
-        .history-modal__title {
-            font-size: 1.2rem;
-            font-weight: 700;
-            color: #e2e8f0;
-            margin-bottom: 1rem;
-        }
-        .history-modal__video {
-            width: 100%;
-            border-radius: 18px;
-            background: rgba(15, 23, 42, 0.85);
-            box-shadow: 0 24px 54px rgba(8, 24, 48, 0.55);
-            margin-bottom: 1.5rem;
-            outline: none;
-        }
-        .history-modal__video:focus {
-            outline: none;
-        }
         </style>
         """,
         unsafe_allow_html=True,
     )
-
-    if "history_modal" not in st.session_state:
-        st.session_state.history_modal = None
 
     total_tasks = len(tasks)
     completed_count = len(completed_tasks)
@@ -861,11 +832,36 @@ def render_history_page() -> None:
             card_id = f"history-card-{key_prefix}-{slug_base}-{index}"
             title_id = f"{slug_base}-title"
 
-            preview_markup = (
-                f"<img src=\"{thumb_preview_src}\" alt=\"thumbnail\">"
-                if thumb_preview_src
-                else "<div class=\"history-card__preview-placeholder\">▶</div>"
-            )
+            cache_identifier = raw_id_str
+            cache_key = f"history_video_{cache_identifier}"
+            inline_preview_key = f"{cache_key}_inline"
+
+            inline_preview_state = st.session_state.get(inline_preview_key)
+            preview_markup = None
+            if (
+                finished_at_raw
+                and isinstance(inline_preview_state, dict)
+                and inline_preview_state.get("updated_at") == finished_at_raw
+            ):
+                inline_bytes = inline_preview_state.get("bytes")
+                inline_mime = inline_preview_state.get("mime") or "video/mp4"
+                if inline_bytes:
+                    preview_markup = video_bytes_to_html(
+                        inline_bytes,
+                        mime=inline_mime,
+                        css_class="history-card__preview-media",
+                        autoplay=inline_preview_state.get("autoplay", False),
+                    )
+                    if inline_preview_state.get("autoplay"):
+                        inline_preview_state["autoplay"] = False
+                        st.session_state[inline_preview_key] = inline_preview_state
+
+            if not preview_markup:
+                preview_markup = (
+                    f"<img src=\"{thumb_preview_src}\" alt=\"thumbnail\">"
+                    if thumb_preview_src
+                    else "<div class=\"history-card__preview-placeholder\">▶</div>"
+                )
 
             anchor_icon = (
                 "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' "
@@ -950,7 +946,6 @@ def render_history_page() -> None:
             st.markdown("\n".join(card_html_top_lines), unsafe_allow_html=True)
 
             warning_messages: list[str] = []
-            cache_key = f"history_video_{raw_task_id}"
             cached_bytes = None
             if task_can_download:
                 cache_entry = st.session_state.get(cache_key)
@@ -967,16 +962,40 @@ def render_history_page() -> None:
                     with play_col:
                         play_key = f"{key_prefix}_play_{raw_task_id}_{index}"
                         if st.button("播放预览", key=play_key):
-                            video_bytes = fetch_latest_video(str(raw_task_id), finished_at_raw)
-                            cache_entry = st.session_state.get(cache_key)
-                            video_url = cache_entry.get("url") if isinstance(cache_entry, dict) else None
+                            cache_entry_obj = st.session_state.get(cache_key)
+                            video_bytes = (
+                                cached_bytes
+                                if cached_bytes
+                                else (
+                                    cache_entry_obj.get("bytes")
+                                    if isinstance(cache_entry_obj, dict)
+                                    and cache_entry_obj.get("updated_at") == finished_at_raw
+                                    else None
+                                )
+                            )
+                            if not video_bytes:
+                                video_bytes = fetch_latest_video(str(raw_task_id), finished_at_raw)
+                                cache_entry_obj = st.session_state.get(cache_key)
                             if video_bytes:
-                                st.session_state.history_modal = {
-                                    "task_id": str(raw_task_id),
-                                    "title": file_name or "视频预览",
-                                    "video_url": video_url,
-                                    "video_bytes": video_bytes,
+                                cache_entry_obj = cache_entry_obj if isinstance(cache_entry_obj, dict) else {}
+                                cache_entry_obj.update(
+                                    {
+                                        "bytes": video_bytes,
+                                        "updated_at": finished_at_raw,
+                                    }
+                                )
+                                if not cache_entry_obj.get("url"):
+                                    media_url = _register_history_media_url(str(raw_task_id), video_bytes)
+                                    if media_url:
+                                        cache_entry_obj["url"] = media_url
+                                st.session_state[cache_key] = cache_entry_obj
+                                st.session_state[inline_preview_key] = {
+                                    "bytes": video_bytes,
+                                    "mime": cache_entry_obj.get("mime") or "video/mp4",
+                                    "updated_at": finished_at_raw,
+                                    "autoplay": True,
                                 }
+                                st.rerun()
                             else:
                                 warning_messages.append("⚠️ 暂无法加载预览，请稍后再试。")
                     with download_col:
@@ -1087,44 +1106,6 @@ def render_history_page() -> None:
             _render_task_collection(task_collection, allow_download=allow_download_flag, key_prefix=key_prefix)
 
     st.markdown("</div>", unsafe_allow_html=True)
-
-    modal_state = st.session_state.get("history_modal")
-    if modal_state:
-        st.markdown(
-            """
-            <div class='history-modal'>
-                <div class='history-modal__content'>
-            """,
-            unsafe_allow_html=True,
-        )
-        modal_title = str(modal_state.get("title") or "视频预览")
-        st.markdown(
-            f"<div class='history-modal__title'>{html.escape(modal_title)}</div>",
-            unsafe_allow_html=True,
-        )
-        video_url = modal_state.get("video_url")
-        video_bytes = modal_state.get("video_bytes")
-        video_html = None
-        if video_url:
-            video_html = textwrap.dedent(
-                f"""
-                <video controls class='history-modal__video'>
-                    <source src='{video_url}' type='video/mp4'>
-                    您的浏览器暂不支持视频播放
-                </video>
-                """
-            )
-        elif video_bytes:
-            video_html = video_bytes_to_html(video_bytes, css_class="history-modal__video")
-
-        if video_html:
-            st.markdown(video_html, unsafe_allow_html=True)
-        else:
-            st.info("暂无可用视频预览")
-        if st.button("关闭预览", key="close_history_modal"):
-            st.session_state.history_modal = None
-            st.rerun()
-        st.markdown("</div></div>", unsafe_allow_html=True)
 
 
 __all__ = ["render_history_page"]
