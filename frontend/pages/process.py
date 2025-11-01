@@ -69,6 +69,7 @@ def render_process_page():
             width: 100%;
             box-sizing: border-box;
             overflow: hidden;
+            margin-top: 3.2rem;
         }
 
         .compare-card::before {
@@ -549,7 +550,7 @@ def render_process_page():
                 with button_section:
                     st.markdown(
                         """
-                        <div style='text-align: center; margin-bottom: 1.8rem;'>
+                        <div style='text-align: center; margin: 2.4rem 0 2rem;'>
                             <p style='color: rgba(255, 255, 255, 0.7); 
                                       font-size: 1.2rem; 
                                       font-weight: 500;
