@@ -302,22 +302,11 @@ def render_process_page():
     st.markdown("<section class='process-shell'>", unsafe_allow_html=True)
     st.markdown("<div class='process-main'>", unsafe_allow_html=True)
 
-    mode_labels = ["⚡ 云端极速处理", "🖥️ 本地专业模式"]
-    if token:
-        default_index = 0 if st.session_state.processing_mode == "remote" else 1
-        selected_label = st.radio(
-            "选择处理模式",
-            mode_labels,
-            index=default_index,
-            horizontal=True,
-            label_visibility="collapsed",
-            key="processing_mode_selector",
-        )
-        st.session_state.processing_mode = (
-            "remote" if selected_label == mode_labels[0] else "local"
-        )
-    else:
+    if not token:
         st.session_state.processing_mode = "local"
+    else:
+        if st.session_state.processing_mode not in {"remote", "local"}:
+            st.session_state.processing_mode = "remote"
 
     processing_mode = st.session_state.processing_mode
 
@@ -479,7 +468,6 @@ def render_process_page():
         )
 
     # 处理按钮区域 - 优化布局
-    st.markdown("<div class='action-dock'>", unsafe_allow_html=True)
     is_processing_local = st.session_state.get("is_processing_local", False)
     button_section = st.container()
     processed_ready = bool(processed_bytes)
@@ -850,7 +838,6 @@ def render_process_page():
                         st.session_state.processing_error = str(e)
                         st.rerun()
 
-    st.markdown("</div>", unsafe_allow_html=True)  # close action-dock
     st.markdown("</div>", unsafe_allow_html=True)  # close process-main
 
     # 侧边分析面板

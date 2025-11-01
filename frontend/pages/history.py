@@ -786,21 +786,24 @@ def render_history_page() -> None:
                 thumb_key = f"history_thumb_{raw_task_id}"
                 thumb_cache = st.session_state.get(thumb_key)
                 cache_updated_at = thumb_cache.get("updated_at") if isinstance(thumb_cache, dict) else None
-                if thumb_cache and cache_updated_at == finished_at_raw:
-                    thumb_preview_src = thumb_cache.get("url")
-                    if (not thumb_preview_src) and thumb_cache.get("data"):
+                if isinstance(thumb_cache, dict) and cache_updated_at == finished_at_raw:
+                    thumb_bytes = thumb_cache.get("bytes")
+                    if not thumb_bytes and thumb_cache.get("data"):
                         try:
                             thumb_bytes = base64.b64decode(thumb_cache["data"])
+                            thumb_cache["bytes"] = thumb_bytes
+                            # 清理旧 data，减少重复存储
+                            thumb_cache.pop("data", None)
                         except Exception:
                             thumb_bytes = None
-                        if thumb_bytes:
-                            media_url = _register_history_media_url(
-                                f"{raw_task_id}_thumb", thumb_bytes, mime="image/jpeg"
-                            )
+                    if thumb_bytes:
+                        media_url = _register_history_media_url(f"{raw_task_id}_thumb", thumb_bytes, mime="image/jpeg")
+                        if media_url:
                             thumb_preview_src = media_url
-                            if thumb_preview_src:
-                                thumb_cache["url"] = thumb_preview_src
-                                st.session_state[thumb_key] = thumb_cache
+                            thumb_cache["url"] = media_url
+                            st.session_state[thumb_key] = thumb_cache
+                    if not thumb_preview_src:
+                        thumb_preview_src = thumb_cache.get("url")
                 else:
                     video_bytes_for_thumb = fetch_latest_video(str(raw_task_id), finished_at_raw, show_spinner=False)
                     thumb_base64 = (
@@ -818,9 +821,10 @@ def render_history_page() -> None:
                             if thumb_bytes
                             else None
                         )
-                        thumb_preview_src = media_url
+                        if media_url:
+                            thumb_preview_src = media_url
                         st.session_state[thumb_key] = {
-                            "data": thumb_base64,
+                            "bytes": thumb_bytes,
                             "url": media_url,
                             "updated_at": finished_at_raw,
                         }
