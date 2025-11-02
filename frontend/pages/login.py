@@ -5,7 +5,7 @@ import streamlit as st
 
 from frontend.auth import save_persistent_auth
 from frontend.config import API_BASE_URL
-from sorawm.utils.ui_utils import login_user
+from sorawm.utils.ui_utils import fetch_current_user, login_user
 
 def render_login_page():
     """渲染登录/注册页面 - 高端玻璃态设计"""
@@ -348,10 +348,38 @@ def render_login_page():
                     with st.spinner("🔄 正在验证登录信息..."):
                         result = login_user(username, password, API_BASE_URL)
                         if result:
-                            st.session_state.user_token = result["token"]
-                            st.session_state.user_info = result["user"]
+                            token = result.get("token")
+                            # 优先使用登录接口返回的用户信息（包含 is_admin），如果没有则通过 /me 接口获取
+                            profile = result.get("user")
+                            
+                            # 调试日志：显示登录返回的数据
+                            with st.expander("🔍 登录调试信息", expanded=False):
+                                st.write("**登录接口返回的完整数据：**")
+                                st.json(result)
+                                st.write(f"**从 result 获取的 user 信息：**")
+                                st.json(profile or {})
+                                if profile:
+                                    st.write(f"**is_admin 字段值：** {profile.get('is_admin', '字段不存在')}")
+                                    st.write(f"**is_admin 类型：** {type(profile.get('is_admin'))}")
+                            
+                            if token and not profile:
+                                st.info("ℹ️ 登录接口未返回用户信息，正在通过 /me 接口获取...")
+                                profile = fetch_current_user(token, API_BASE_URL)
+                                if profile:
+                                    st.success(f"✅ 已获取用户信息，is_admin={profile.get('is_admin', False)}")
+                            
+                            st.session_state.user_token = token
+                            st.session_state.user_info = profile or {}
                             st.session_state.logged_in = True
-                            save_persistent_auth(result["token"], result["user"])
+                            
+                            # 最终调试信息
+                            with st.expander("🔍 最终保存的用户信息", expanded=False):
+                                st.write("**即将保存到 session_state 的用户信息：**")
+                                st.json(profile or {})
+                                st.write(f"**is_admin 最终值：** {(profile or {}).get('is_admin', '字段不存在')}")
+                            
+                            if token and profile:
+                                save_persistent_auth(token, profile)
                             st.session_state.page = "upload"
                             st.success("✅ 登录成功！正在跳转...")
                             st.rerun()

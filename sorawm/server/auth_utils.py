@@ -11,6 +11,7 @@ from jose import JWTError, jwt
 SECRET_KEY = secrets.token_urlsafe(32)
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7天
+SESSION_TOKEN_TTL_HOURS = 12
 
 
 def hash_password(password: str) -> str:
@@ -57,7 +58,18 @@ def decode_access_token(token: str) -> Optional[dict]:
         return None
 
 
-def generate_simple_token(username: str) -> str:
-    """生成简单的用户令牌（用于 Streamlit session）"""
-    return hashlib.sha256(f"{username}:{SECRET_KEY}".encode()).hexdigest()
+def generate_session_token() -> tuple[str, str]:
+    """生成一次性会话令牌及其哈希值"""
+    raw = secrets.token_urlsafe(40)
+    hashed = hashlib.sha256(raw.encode()).hexdigest()
+    return raw, hashed
 
+
+def hash_session_token(token: str) -> str:
+    """计算会话令牌的哈希值"""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def generate_simple_token(username: str) -> str:
+    """已弃用：保留兼容性"""
+    return hashlib.sha256(f"{username}:{SECRET_KEY}".encode()).hexdigest()

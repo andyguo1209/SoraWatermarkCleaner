@@ -33,6 +33,8 @@ class UserInfo(BaseModel):
     email: str | None
     created_at: datetime
     last_login: datetime | None
+    is_admin: bool
+    is_approved: bool
 
     class Config:
         from_attributes = True

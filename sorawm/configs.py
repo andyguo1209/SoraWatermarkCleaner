@@ -1,7 +1,13 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 ROOT = Path(__file__).parent.parent
+
+# 加载 .env 环境变量，若存在则覆盖默认配置
+env_path = ROOT / ".env"
+load_dotenv(dotenv_path=env_path, override=False)
 
 
 RESOURCES_DIR = ROOT / "resources"

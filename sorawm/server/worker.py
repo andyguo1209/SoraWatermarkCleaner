@@ -138,12 +138,15 @@ class WMRemoveTaskWorker:
         except Exception as e:
             logger.error(f"Error updating progress for task {task_id}: {e}")
 
-    async def get_task_status(self, task_id: str, user_id: int) -> WMRemoveResults | None:
-        """获取任务状态（带用户验证）"""
+    async def get_task_status(
+        self, task_id: str, user_id: int | None, *, allow_admin: bool = False
+    ) -> WMRemoveResults | None:
+        """获取任务状态（带用户验证，管理员可跳过验证）"""
         async with get_session() as session:
-            result = await session.execute(
-                select(Task).where(Task.id == task_id, Task.user_id == user_id)
-            )
+            stmt = select(Task).where(Task.id == task_id)
+            if not allow_admin:
+                stmt = stmt.where(Task.user_id == user_id)
+            result = await session.execute(stmt)
             task = result.scalar_one_or_none()
             if task is None:
                 return None
@@ -153,12 +156,15 @@ class WMRemoveTaskWorker:
                 download_url=task.download_url,
             )
 
-    async def get_output_path(self, task_id: str, user_id: int) -> Path | None:
-        """获取任务输出路径（带用户验证）"""
+    async def get_output_path(
+        self, task_id: str, user_id: int | None, *, allow_admin: bool = False
+    ) -> Path | None:
+        """获取任务输出路径（带用户验证，管理员可跳过验证）"""
         async with get_session() as session:
-            result = await session.execute(
-                select(Task).where(Task.id == task_id, Task.user_id == user_id)
-            )
+            stmt = select(Task).where(Task.id == task_id)
+            if not allow_admin:
+                stmt = stmt.where(Task.user_id == user_id)
+            result = await session.execute(stmt)
             task = result.scalar_one_or_none()
             if task is None or task.output_path is None:
                 return None

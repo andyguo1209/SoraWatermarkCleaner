@@ -602,18 +602,6 @@ def apply_custom_css():
         }
 
         /* 顶部导航按钮 */
-        .st-key-nav_home,
-        .st-key-nav_history,
-        .st-key-nav_logout {
-            position: fixed;
-            top: 1.2rem;
-            z-index: 1000;
-        }
-
-        .st-key-nav_home { right: 476px; }
-        .st-key-nav_history { right: 310px; }
-        .st-key-nav_logout { right: 144px; }
-
         .st-key-nav_home .stButton,
         .st-key-nav_history .stButton,
         .st-key-nav_logout .stButton {
@@ -669,10 +657,6 @@ def apply_custom_css():
         }
 
         .nav-user-badge {
-            position: fixed;
-            top: 1.2rem;
-            right: 640px;
-            z-index: 1000;
             display: inline-flex;
             align-items: center;
             gap: 0.9rem;
