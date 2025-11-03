@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import base64
+import json
 from uuid import uuid4
 from datetime import datetime
 import textwrap
@@ -29,8 +30,27 @@ def render_history_page() -> None:
         st.rerun()
         return
 
-    with st.spinner("正在加载历史记录..."):
-        history_data = get_user_history(st.session_state.user_token, API_BASE_URL)
+    user_token = st.session_state.user_token
+    cache_state_key = f"history_history_cache_{user_token}"
+    refresh_flag_key = f"{cache_state_key}_needs_refresh"
+
+    cache_entry = st.session_state.get(cache_state_key)
+    needs_refresh = st.session_state.get(refresh_flag_key, cache_entry is None)
+    history_data = cache_entry.get("data") if isinstance(cache_entry, dict) else None
+
+    if needs_refresh or not history_data:
+        with st.spinner("正在加载历史记录..."):
+            fetched_data = get_user_history(user_token, API_BASE_URL)
+        if fetched_data:
+            history_data = fetched_data
+            st.session_state[cache_state_key] = {
+                "data": fetched_data,
+                "fetched_at": datetime.utcnow().isoformat(),
+            }
+            st.session_state[refresh_flag_key] = False
+        else:
+            history_data = None
+            st.session_state[refresh_flag_key] = True
 
     if not history_data:
         st.warning("⚠️ 无法获取历史记录")
@@ -791,82 +811,198 @@ def render_history_page() -> None:
             box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.12);
         }
         .history-card__actions {
-            margin-top: 10px;
-            padding: 18px 20px;
-            border-radius: 20px;
-            background: radial-gradient(circle at 20% 20%, rgba(59, 226, 255, 0.12), transparent 55%),
-                        linear-gradient(135deg, rgba(4, 20, 38, 0.85), rgba(16, 42, 72, 0.78));
-            border: 1px solid rgba(56, 189, 248, 0.25);
+            margin-top: 52px;
+            padding: 22px 26px 26px;
+            border-radius: 22px;
+            background:
+                radial-gradient(circle at 18% 18%, rgba(59, 226, 255, 0.2), transparent 60%),
+                radial-gradient(circle at 78% 16%, rgba(94, 234, 255, 0.18), transparent 62%),
+                linear-gradient(135deg, rgba(4, 14, 32, 0.95), rgba(12, 30, 56, 0.9));
+            border: 1px solid rgba(59, 211, 248, 0.3);
             box-shadow:
-                inset 0 0 0 1px rgba(59, 130, 246, 0.12),
-                0 18px 36px rgba(4, 16, 28, 0.45);
+                inset 0 0 0 1px rgba(59, 211, 248, 0.12),
+                0 16px 38px rgba(6, 20, 36, 0.55);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            position: relative;
             overflow: hidden;
         }
-        .history-card__actions--inline {
-            width: 100%;
+        .history-card__actions::before,
+        .history-card__actions::after {
+            content: "";
+            position: absolute;
+            inset: -45% -32%;
+            background: radial-gradient(circle at 50% 50%, rgba(59, 130, 246, 0.14), transparent 68%);
+            pointer-events: none;
         }
-        .history-card__actions-group {
+        .history-card__actions::after {
+            inset: auto -20% -40% 10%;
+            background: radial-gradient(circle at 40% 60%, rgba(34, 211, 238, 0.16), transparent 70%);
+        }
+        .history-card__actions-headline {
+            position: relative;
             display: flex;
-            flex-direction: row;
-            justify-content: center;
-            gap: 28px;
-            width: 100%;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
         }
-        .history-card__actions-group .stElementContainer {
-            flex: 1 1 0;
+        .history-card__actions-title {
+            font-size: 1.02rem;
+            font-weight: 700;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            color: rgba(217, 249, 255, 0.92);
+        }
+        .history-card__actions-desc {
+            font-size: 0.9rem;
+            color: rgba(191, 219, 254, 0.7);
+            letter-spacing: 0.05em;
+        }
+        .history-card__actions-body {
+            position: relative;
             display: flex;
-            justify-content: center;
+            flex-direction: column;
+            gap: 14px;
         }
-        .history-card__actions-group .stElementContainer > div {
-            flex: 1;
+        .history-card__actions-body::before {
+            content: "";
+            position: absolute;
+            top: -12px;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, rgba(59, 211, 248, 0), rgba(59, 211, 248, 0.4), rgba(59, 211, 248, 0));
+            opacity: 0.7;
+        }
+        .history-card__actions-warnings {
+            position: relative;
             display: flex;
-            justify-content: center;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 4px;
         }
-        .history-card__actions [data-testid="column"] {
-            padding: 0 !important;
+        .history-card__actions [data-testid="stHorizontalBlock"] {
+            width: 100% !important;
+            margin: 0 !important;
+            gap: 18px !important;
+        }
+        .history-card__actions [data-testid="stElementContainer"] {
+            width: 100% !important;
+            height: 100% !important;
+        }
+        .history-card__actions [data-testid="stElementContainer"] > div {
+            width: 100% !important;
+            height: 100% !important;
             display: flex;
+            align-items: center;
         }
+        .history-card__actions [data-testid="stHorizontalBlock"] > div,
         .history-card__actions [data-testid="column"] > div {
-            flex: 1;
+            width: 100%;
+            display: flex;
+            align-items: center;
+        }
+        .history-card__actions [data-testid="stColumn"] {
+            flex: 1 1 0 !important;
+            display: flex;
+            align-items: center;
+        }
+        .history-card__actions .stButton,
+        .history-card__actions [data-testid="stDownloadButton"] {
+            width: 100%;
             display: flex;
             justify-content: center;
             align-items: center;
+            height: 100%;
         }
         .history-card__actions .stButton > button,
+        .history-card__actions [data-testid="stDownloadButton"] > button,
         .history-card__actions [data-testid="stDownloadButton"] > div > button {
-            width: min(260px, 100%);
+            width: 100%;
             border-radius: 22px;
-            padding: 16px 0;
-            font-size: 1.05rem;
+            padding: 16px 24px;
+            font-size: 1rem;
             font-weight: 600;
             letter-spacing: 0.12em;
-            background: linear-gradient(135deg, rgba(18, 208, 208, 0.86), rgba(72, 118, 255, 0.75));
-            border: 1.8px solid rgba(118, 224, 255, 0.55);
-            color: rgba(236, 245, 255, 0.98);
+            color: rgba(236, 245, 255, 0.96);
+            background: linear-gradient(135deg, rgba(59, 198, 255, 0.86), rgba(56, 222, 222, 0.82));
+            border: 1.8px solid rgba(148, 233, 255, 0.55);
             box-shadow:
                 inset 0 0 12px rgba(255, 255, 255, 0.25),
-                0 20px 44px rgba(22, 116, 255, 0.5);
-            transition: all 0.28s ease;
+                0 20px 42px rgba(15, 118, 255, 0.45);
+            transition: all 0.24s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            position: relative;
+            overflow: hidden;
+            min-height: 58px;
+            height: 100%;
+        }
+        .history-card__actions .stButton > button::before,
+        .history-card__actions [data-testid="stDownloadButton"] > button::before,
+        .history-card__actions [data-testid="stDownloadButton"] > div > button::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.04));
+            opacity: 0;
+            transition: opacity 0.24s ease;
         }
         .history-card__actions .stButton > button:hover,
+        .history-card__actions [data-testid="stDownloadButton"] > button:hover,
         .history-card__actions [data-testid="stDownloadButton"] > div > button:hover {
-            transform: translateY(-3px) scale(1.02);
+            transform: translateY(-2px);
             box-shadow:
-                inset 0 0 14px rgba(255, 255, 255, 0.4),
-                0 26px 54px rgba(72, 132, 255, 0.55);
+                inset 0 0 16px rgba(255, 255, 255, 0.38),
+                0 26px 54px rgba(56, 140, 255, 0.5);
         }
-        .history-card__actions .stButton:first-child > button {
-            background: linear-gradient(135deg, rgba(17, 235, 211, 0.85), rgba(76, 207, 255, 0.75));
-            border-color: rgba(148, 255, 236, 0.6);
+        .history-card__actions .stButton > button:hover::before,
+        .history-card__actions [data-testid="stDownloadButton"] > button:hover::before,
+        .history-card__actions [data-testid="stDownloadButton"] > div > button:hover::before {
+            opacity: 1;
+        }
+        .history-card__actions .stButton > button:active,
+        .history-card__actions [data-testid="stDownloadButton"] > button:active,
+        .history-card__actions [data-testid="stDownloadButton"] > div > button:active {
+            transform: translateY(-1px);
+        }
+        .history-card__actions .history-card__btn--primary > button {
+            background: linear-gradient(135deg, rgba(34, 211, 238, 0.9), rgba(59, 130, 246, 0.88));
+            border-color: rgba(165, 243, 252, 0.68);
+        }
+        .history-card__actions .history-card__btn--primary > button::after {
+            content: "▶";
+            font-size: 0.9em;
+        }
+        .history-card__actions .history-card__btn--download > button::after,
+        .history-card__actions .history-card__btn--download > div > button::after {
+            content: "↓";
+            font-size: 0.9em;
+        }
+        @media (max-width: 768px) {
+            .history-card__actions {
+                padding: 20px;
+                gap: 16px;
+            }
+            .history-card__actions [data-testid="stHorizontalBlock"] {
+                flex-direction: column !important;
+                gap: 12px !important;
+            }
         }
         .history-card__actions-warning {
-            margin-top: 12px;
-            padding: 12px 16px;
-            border-radius: 14px;
-            background: rgba(59, 130, 246, 0.14);
-            border: 1px solid rgba(59, 130, 246, 0.3);
-            color: rgba(226, 232, 240, 0.82);
-            font-size: 0.88rem;
+            position: relative;
+            width: 100%;
+            padding: 12px 18px;
+            border-radius: 16px;
+            background: rgba(37, 99, 235, 0.18);
+            border: 1px solid rgba(96, 165, 250, 0.35);
+            color: rgba(226, 240, 255, 0.85);
+            font-size: 0.9rem;
+            letter-spacing: 0.04em;
         }
         .history-empty {
             padding: 48px;
@@ -1226,14 +1362,6 @@ def render_history_page() -> None:
 
             message_html = f"<div class=\"history-card__message\">{html.escape(message_text)}</div>" if message_text else ""
 
-            actions_section_top = actions_section_bottom = ""
-            if task_can_download:
-                actions_section_top = (
-                    f"<div class=\"history-card__actions history-card__actions--inline\" id=\"{card_id}-actions\">"
-                    "<div class=\"history-card__actions-group\">"
-                )
-                actions_section_bottom = "</div></div>"
-
             card_html_top_lines = [
                 f'<article class="history-card" id="{card_id}">',
                 '<div class="history-card__layout">',
@@ -1251,8 +1379,14 @@ def render_history_page() -> None:
             if task_can_download:
                 card_html_top_lines.extend(
                     [
-                        f'<div class="history-card__actions history-card__actions--inline" id="{card_id}-actions">',
-                        '<div class="history-card__actions-group">',
+                        f'<div class="history-card__actions" id="{card_id}-actions">',
+                        '<div class="history-card__actions-headline">',
+                        '<span class="history-card__actions-title">结果操作</span>',
+                        '<span class="history-card__actions-desc">快速预览或保存当前处理结果</span>',
+                        '</div>',
+                        '<div class="history-card__actions-body"></div>',
+                        '<div class="history-card__actions-warnings"></div>',
+                        '</div>',
                     ]
                 )
             st.markdown("\n".join(card_html_top_lines), unsafe_allow_html=True)
@@ -1268,159 +1402,163 @@ def render_history_page() -> None:
                     cached_bytes = cache_entry.get("bytes")
 
             if task_can_download:
-                actions_container = st.container()
-                with actions_container:
-                    play_col, download_col = st.columns(2, gap="large")
-                    with play_col:
-                        play_key = f"{key_prefix}_play_{raw_task_id}_{index}"
-                        if st.button("播放预览", key=play_key):
-                            cache_entry_obj = st.session_state.get(cache_key)
-                            video_bytes = (
-                                cached_bytes
-                                if cached_bytes
-                                else (
-                                    cache_entry_obj.get("bytes")
-                                    if isinstance(cache_entry_obj, dict)
-                                    and cache_entry_obj.get("updated_at") == finished_at_raw
-                                    else None
-                                )
+                play_col, download_col = st.columns(2, gap="large")
+                with play_col:
+                    play_key = f"{key_prefix}_play_{raw_task_id}_{index}"
+                    if st.button("播放预览", key=play_key):
+                        cache_entry_obj = st.session_state.get(cache_key)
+                        video_bytes = (
+                            cached_bytes
+                            if cached_bytes
+                            else (
+                                cache_entry_obj.get("bytes")
+                                if isinstance(cache_entry_obj, dict)
+                                and cache_entry_obj.get("updated_at") == finished_at_raw
+                                else None
                             )
-                            if not video_bytes:
+                        )
+                        if not video_bytes:
+                            video_bytes = fetch_latest_video(str(raw_task_id), finished_at_raw)
+                            cache_entry_obj = st.session_state.get(cache_key)
+                        if video_bytes:
+                            cache_entry_obj = cache_entry_obj if isinstance(cache_entry_obj, dict) else {}
+                            cache_entry_obj.update(
+                                {
+                                    "bytes": video_bytes,
+                                    "updated_at": finished_at_raw,
+                                }
+                            )
+                            if not cache_entry_obj.get("url"):
+                                media_url = _register_history_media_url(str(raw_task_id), video_bytes)
+                                if media_url:
+                                    cache_entry_obj["url"] = media_url
+                            st.session_state[cache_key] = cache_entry_obj
+                            st.session_state[inline_preview_key] = {
+                                "bytes": video_bytes,
+                                "mime": cache_entry_obj.get("mime") or "video/mp4",
+                                "updated_at": finished_at_raw,
+                                "autoplay": True,
+                            }
+                            st.rerun()
+                        else:
+                            warning_messages.append("⚠️ 暂无法加载预览，请稍后再试。")
+                with download_col:
+                    download_key = f"{key_prefix}_download_{raw_task_id}_{index}"
+                    trigger_key = f"{key_prefix}_download_trigger_{raw_task_id}_{index}"
+                    if cached_bytes:
+                        st.download_button(
+                            "下载",
+                            data=cached_bytes,
+                            file_name=file_name,
+                            mime="video/mp4",
+                            key=download_key,
+                        )
+                    else:
+                        if st.button("下载结果", key=trigger_key):
+                            with st.spinner("正在准备下载，请稍候..."):
                                 video_bytes = fetch_latest_video(str(raw_task_id), finished_at_raw)
-                                cache_entry_obj = st.session_state.get(cache_key)
                             if video_bytes:
-                                cache_entry_obj = cache_entry_obj if isinstance(cache_entry_obj, dict) else {}
-                                cache_entry_obj.update(
+                                cache_entry = st.session_state.get(cache_key) or {}
+                                cache_entry.update(
                                     {
                                         "bytes": video_bytes,
                                         "updated_at": finished_at_raw,
                                     }
                                 )
-                                if not cache_entry_obj.get("url"):
+                                if not cache_entry.get("url"):
                                     media_url = _register_history_media_url(str(raw_task_id), video_bytes)
-                                    if media_url:
-                                        cache_entry_obj["url"] = media_url
-                                st.session_state[cache_key] = cache_entry_obj
-                                st.session_state[inline_preview_key] = {
-                                    "bytes": video_bytes,
-                                    "mime": cache_entry_obj.get("mime") or "video/mp4",
-                                    "updated_at": finished_at_raw,
-                                    "autoplay": True,
-                                }
+                                    cache_entry["url"] = media_url
+                                st.session_state[cache_key] = cache_entry
                                 st.rerun()
                             else:
-                                warning_messages.append("⚠️ 暂无法加载预览，请稍后再试。")
-                    with download_col:
-                        download_key = f"{key_prefix}_download_{raw_task_id}_{index}"
-                        trigger_key = f"{key_prefix}_download_trigger_{raw_task_id}_{index}"
-                        if cached_bytes:
-                            st.download_button(
-                                "下载",
-                                data=cached_bytes,
-                                file_name=file_name,
-                                mime="video/mp4",
-                                key=download_key,
-                            )
-                        else:
-                            if st.button("下载结果", key=trigger_key):
-                                with st.spinner("正在准备下载，请稍候..."):
-                                    video_bytes = fetch_latest_video(str(raw_task_id), finished_at_raw)
-                                if video_bytes:
-                                    cache_entry = st.session_state.get(cache_key) or {}
-                                    cache_entry.update(
-                                        {
-                                            "bytes": video_bytes,
-                                            "updated_at": finished_at_raw,
-                                        }
-                                    )
-                                    if not cache_entry.get("url"):
-                                        media_url = _register_history_media_url(str(raw_task_id), video_bytes)
-                                        cache_entry["url"] = media_url
-                                    st.session_state[cache_key] = cache_entry
-                                    st.rerun()
-                                else:
-                                    warning_messages.append("⚠️ 下载链接暂不可用，请稍后重试。")
-
+                                warning_messages.append("⚠️ 下载链接暂不可用，请稍后重试。")
                 relocation_script = textwrap.dedent(
                     f"""
                     <script>
                     (function() {{
-                        const holderSelector = "#{card_id}-actions .history-card__actions-group";
-                        const keyClasses = [
-                            "st-key-{key_prefix}_play_{raw_task_id}_{index}",
-                            "st-key-{key_prefix}_download_{raw_task_id}_{index}"
-                        ];
                         const doc = window.parent ? window.parent.document : document;
                         if (!doc) return;
-                        function ensureHolder() {{
-                            return doc.querySelector(holderSelector);
-                        }}
-                        function syncButtons() {{
-                            const holder = ensureHolder();
-                            if (!holder) return false;
-                            let synced = 0;
-                            keyClasses.forEach((cls) => {{
-                                const origin = doc.querySelector("." + cls);
-                                if (!origin) return;
-                                const originButton = origin.querySelector("button");
-                                if (!originButton) return;
-                                const sourceHtml = origin.innerHTML;
-                                let clone = holder.querySelector(`[data-clone-for="${{cls}}"]`);
-                                if (!clone || clone.getAttribute("data-source-html") !== sourceHtml) {{
-                                    if (clone) {{
-                                        holder.removeChild(clone);
-                                    }}
-                                    clone = origin.cloneNode(true);
-                                    clone.setAttribute("data-clone-for", cls);
-                                    clone.setAttribute("data-source-html", sourceHtml);
-                                    const clonedButton = clone.querySelector("button");
-                                    if (clonedButton) {{
-                                        clonedButton.addEventListener("click", function(evt) {{
-                                            evt.preventDefault();
-                                            evt.stopPropagation();
-                                            originButton.click();
-                                        }});
-                                    }}
-                                    holder.appendChild(clone);
+                        const holder = doc.querySelector("#{card_id}-actions .history-card__actions-body");
+                        if (!holder) return;
+                        const selectors = [
+                            ".st-key-{play_key}",
+                            ".st-key-{download_key}",
+                            ".st-key-{trigger_key}"
+                        ];
+                        const findBlock = () => {{
+                            for (const selector of selectors) {{
+                                const el = doc.querySelector(selector);
+                                if (el) {{
+                                    const block = el.closest('div[data-testid="stHorizontalBlock"]');
+                                    if (block) return block;
                                 }}
-                                if (clone) {{
-                                    clone.style.width = "100%";
-                                    clone.style.margin = "0";
-                                    clone.style.display = "flex";
-                                    clone.style.justifyContent = "center";
-                                    clone.style.alignItems = "center";
+                            }}
+                            return null;
+                        }};
+                        const decorateButtons = () => {{
+                            const containers = holder.querySelectorAll('div.stButton, div[data-testid="stDownloadButton"]');
+                            containers.forEach((node, index) => {{
+                                node.classList.remove("history-card__btn--primary", "history-card__btn--download");
+                                if (index === 0) {{
+                                    node.classList.add("history-card__btn--primary");
+                                }} else if (index === 1) {{
+                                    node.classList.add("history-card__btn--download");
                                 }}
-                                origin.style.position = "absolute";
-                                origin.style.left = "-9999px";
-                                origin.style.visibility = "hidden";
-                                origin.style.pointerEvents = "none";
-                                synced += 1;
                             }});
-                            return synced === keyClasses.length;
-                        }}
+                        }};
+                        const moveBlock = () => {{
+                            const block = findBlock();
+                            if (!block) return false;
+                            if (holder.contains(block)) return true;
+                            holder.innerHTML = "";
+                            block.style.opacity = "0";
+                            block.style.transition = "opacity 0.25s ease";
+                            holder.appendChild(block);
+                            decorateButtons();
+                            requestAnimationFrame(() => {{
+                                block.style.opacity = "1";
+                            }});
+                            return true;
+                        }};
                         let attempts = 0;
-                        const maxAttempts = 50;
+                        const maxAttempts = 30;
                         const timer = setInterval(() => {{
                             attempts += 1;
-                            if (syncButtons() || attempts >= maxAttempts) {{
+                            if (moveBlock() || attempts >= maxAttempts) {{
                                 clearInterval(timer);
+                                decorateButtons();
                             }}
                         }}, 80);
+                        if (moveBlock()) {{
+                            decorateButtons();
+                        }}
                     }})();
                     </script>
                     """
                 )
                 components.html(relocation_script, height=0, width=0)
+                if warning_messages:
+                    warnings_html = "".join(
+                        f'<div class="history-card__actions-warning">{html.escape(text)}</div>'
+                        for text in warning_messages
+                    )
+                    warning_script = textwrap.dedent(
+                        f"""
+                        <script>
+                        (function() {{
+                            const doc = window.parent ? window.parent.document : document;
+                            if (!doc) return;
+                            const target = doc.querySelector("#{card_id}-actions .history-card__actions-warnings");
+                            if (target) {{
+                                target.innerHTML = {json.dumps(warnings_html)};
+                            }}
+                        }})();
+                        </script>
+                        """
+                    )
+                    components.html(warning_script, height=0, width=0)
 
             closing_lines: list[str] = []
-            if task_can_download:
-                closing_lines.append("</div></div>")
-
-            if warning_messages:
-                closing_lines.extend(
-                    f'<div class="history-card__actions-warning">{html.escape(text)}</div>'
-                    for text in warning_messages
-                )
             if message_html:
                 closing_lines.append(message_html)
             closing_lines.extend(
