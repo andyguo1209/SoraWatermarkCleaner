@@ -28,18 +28,17 @@ def render_navigation() -> None:
     st.markdown(
         """
         <style>
-        /* 导航栏主容器 - 移除背景框，靠右对齐 */
+        /* 导航栏主容器 - 固定定位在右上角，所有页面位置一致 */
         div[data-testid="stHorizontalBlock"]:has(.nav-user-badge) {
             position: fixed !important;
-            top: 0.5rem !important;
-            right: 0.5rem !important;
+            top: 1.0rem !important;
+            right: 0.75rem !important;
             z-index: 9999 !important;
             display: flex !important;
             align-items: center !important;
             justify-content: flex-end !important;
-            width: auto !important;
-            min-width: auto !important;
-            max-width: fit-content !important;
+            flex-wrap: nowrap !important;
+            width: fit-content !important;
             padding: 0 !important;
             margin: 0 !important;
             background: transparent !important;
@@ -47,6 +46,8 @@ def render_navigation() -> None:
             border: none !important;
             border-radius: 0 !important;
             box-shadow: none !important;
+            gap: 0.75rem !important;
+            white-space: nowrap !important;
         }
         
         /* 所有列容器 - 统一处理，无额外间距 */
@@ -54,15 +55,11 @@ def render_navigation() -> None:
             flex: 0 0 auto !important;
             width: auto !important;
             padding: 0 !important;
-            margin: 0 0 0 0.35rem !important;
+            margin: 0 !important;
             min-width: auto !important;
             max-width: none !important;
         }
 
-        div[data-testid="stHorizontalBlock"]:has(.nav-user-badge) div[data-testid="column"]:first-child {
-            margin-left: 0 !important;
-        }
-        
         /* 垂直块容器 - 统一高度36px */
         div[data-testid="stHorizontalBlock"]:has(.nav-user-badge) div[data-testid="stVerticalBlock"] {
             padding: 0 !important;
@@ -97,11 +94,13 @@ def render_navigation() -> None:
             height: 36px !important;
             min-height: 36px !important;
             max-height: 36px !important;
+            background: transparent !important;
+            box-shadow: none !important;
         }
         
         /* 用户徽章 - 统一高度36px */
         div[data-testid="stHorizontalBlock"]:has(.nav-user-badge) .nav-user-badge {
-            margin: 0 0.4rem 0 0 !important;
+            margin: 0 0.35rem 0 0 !important;
             padding: 0 1rem !important;
             height: 36px !important;
             min-height: 36px !important;
@@ -109,10 +108,10 @@ def render_navigation() -> None:
             display: inline-flex !important;
             align-items: center !important;
             border-radius: 10px !important;
-            background: rgba(0, 255, 255, 0.1) !important;
-            border: 1px solid rgba(0, 255, 255, 0.25) !important;
-            color: rgba(255, 255, 255, 0.95) !important;
-            font-size: 0.85rem !important;
+            background: rgba(59, 130, 246, 0.16) !important;
+            border: 1px solid rgba(59, 130, 246, 0.35) !important;
+            color: rgba(224, 239, 255, 0.96) !important;
+            font-size: 0.82rem !important;
             font-weight: 500 !important;
             white-space: nowrap !important;
             transition: all 0.2s ease !important;
@@ -120,8 +119,8 @@ def render_navigation() -> None:
         }
         
         div[data-testid="stHorizontalBlock"]:has(.nav-user-badge) .nav-user-badge:hover {
-            background: rgba(0, 255, 255, 0.15) !important;
-            border-color: rgba(0, 255, 255, 0.35) !important;
+            background: rgba(59, 130, 246, 0.24) !important;
+            border-color: rgba(96, 165, 250, 0.55) !important;
         }
         
         /* 所有按钮 - 严格统一高度40px，精确控制 */
@@ -129,19 +128,19 @@ def render_navigation() -> None:
         div[data-testid="stHorizontalBlock"]:has(.nav-user-badge) button[key="nav_history"],
         div[data-testid="stHorizontalBlock"]:has(.nav-user-badge) button[key="nav_admin"],
         div[data-testid="stHorizontalBlock"]:has(.nav-user-badge) button[key="nav_logout"] {
-            padding: 0.35rem 0.85rem !important;
-            border-radius: 10px !important;
-            border: 1px solid rgba(255, 255, 255, 0.14) !important;
-            background: rgba(255, 255, 255, 0.07) !important;
-            color: rgba(255, 255, 255, 0.92) !important;
-            font-size: 0.85rem !important;
+            padding: 0.45rem 0.9rem !important;
+            border-radius: 9px !important;
+            border: 1px solid rgba(255, 255, 255, 0.22) !important;
+            background: transparent !important;
+            color: rgba(236, 247, 255, 0.95) !important;
+            font-size: 0.84rem !important;
             font-weight: 500 !important;
             height: 36px !important;
             min-height: 36px !important;
             max-height: 36px !important;
             line-height: 1 !important;
             transition: all 0.2s ease !important;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15) !important;
+            box-shadow: none !important;
             margin: 0 !important;
             width: auto !important;
             min-width: fit-content !important;
@@ -162,7 +161,7 @@ def render_navigation() -> None:
         div[data-testid="stHorizontalBlock"]:has(.nav-user-badge) button[key="nav_logout"] p {
             margin: 0 !important;
             padding: 0 !important;
-            font-size: 0.85rem !important;
+            font-size: 0.84rem !important;
             font-weight: 500 !important;
             line-height: 1 !important;
             display: inline-flex !important;
@@ -174,26 +173,26 @@ def render_navigation() -> None:
         div[data-testid="stHorizontalBlock"]:has(.nav-user-badge) button[key="nav_home"]:hover,
         div[data-testid="stHorizontalBlock"]:has(.nav-user-badge) button[key="nav_history"]:hover,
         div[data-testid="stHorizontalBlock"]:has(.nav-user-badge) button[key="nav_admin"]:hover {
-            background: rgba(255, 255, 255, 0.14) !important;
-            border-color: rgba(0, 255, 255, 0.45) !important;
+            background: rgba(59, 130, 246, 0.18) !important;
+            border-color: rgba(147, 197, 253, 0.62) !important;
             color: rgba(255, 255, 255, 1) !important;
-            transform: translateY(-2px) scale(1.02) !important;
-            box-shadow: 0 8px 20px rgba(0, 255, 255, 0.25) !important;
+            transform: translateY(-1px) scale(1.01) !important;
+            box-shadow: none !important;
         }
         
         /* 退出按钮特殊样式 */
         div[data-testid="stHorizontalBlock"]:has(.nav-user-badge) button[key="nav_logout"] {
-            background: rgba(239, 68, 68, 0.16) !important;
-            border-color: rgba(239, 68, 68, 0.38) !important;
-            color: rgba(248, 113, 113, 0.96) !important;
+            background: transparent !important;
+            border-color: rgba(239, 68, 68, 0.42) !important;
+            color: rgba(255, 189, 189, 0.96) !important;
         }
         
         div[data-testid="stHorizontalBlock"]:has(.nav-user-badge) button[key="nav_logout"]:hover {
-            background: rgba(239, 68, 68, 0.24) !important;
+            background: rgba(239, 68, 68, 0.26) !important;
             border-color: rgba(239, 68, 68, 0.55) !important;
             color: rgba(248, 113, 113, 1) !important;
-            transform: translateY(-2px) scale(1.02) !important;
-            box-shadow: 0 8px 20px rgba(239, 68, 68, 0.35) !important;
+            transform: translateY(-1px) scale(1.01) !important;
+            box-shadow: none !important;
         }
         
         /* Markdown 容器 - 统一高度36px */
@@ -219,6 +218,11 @@ def render_navigation() -> None:
             height: 36px !important;
             min-height: 36px !important;
             max-height: 36px !important;
+        }
+
+        /* 为主内容区域添加顶部间距，避免被固定导航栏遮挡 */
+        div[data-testid="stAppViewContainer"] > .main .block-container {
+            padding-top: 0.5rem !important;
         }
         </style>
         """,

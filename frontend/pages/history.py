@@ -7,6 +7,7 @@ from datetime import datetime
 import textwrap
 import re
 from typing import Optional, Sequence
+from math import ceil
 
 import streamlit as st
 from streamlit import runtime
@@ -15,6 +16,9 @@ import streamlit.components.v1 as components
 from frontend.config import API_BASE_URL
 from frontend.media import extract_video_thumbnail_base64, video_bytes_to_html
 from sorawm.utils.ui_utils import download_task_video, get_user_history
+
+
+DEFAULT_HISTORY_PAGE_SIZE = 6
 
 
 def render_history_page() -> None:
@@ -36,6 +40,8 @@ def render_history_page() -> None:
     completed_tasks = [task for task in tasks if task.get("status") == "FINISHED"]
     active_tasks = [task for task in tasks if task.get("status") in {"PROCESSING", "UPLOADING", "PENDING"}]
     error_tasks = [task for task in tasks if task.get("status") == "ERROR"]
+
+    st.session_state.setdefault("history_tasks_per_page", DEFAULT_HISTORY_PAGE_SIZE)
 
     st.markdown(
         """
@@ -80,6 +86,292 @@ def render_history_page() -> None:
         .history-page {
             width: min(1280px, 95vw);
             margin: 0 auto;
+        }
+        @keyframes history-pagination-glow {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 0.7; }
+        }
+        .history-pagination__info {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+            padding: 13px 32px;
+            min-height: 46px;
+            border-radius: 18px;
+            background:
+                linear-gradient(135deg, rgba(15, 23, 42, 0.85), rgba(30, 58, 138, 0.5));
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            box-shadow:
+                inset 0 0 0 1px rgba(96, 165, 250, 0.12),
+                0 16px 40px rgba(8, 20, 48, 0.55);
+            backdrop-filter: blur(20px);
+            position: relative;
+            overflow: hidden;
+            flex-wrap: wrap;
+            flex: 1;
+            width: 100%;
+        }
+        .history-pagination__info::before {
+            content: "";
+            position: absolute;
+            inset: -30%;
+            background: radial-gradient(circle at 50% 50%, rgba(96, 165, 250, 0.08), transparent 65%);
+            animation: history-pagination-glow 10s ease-in-out infinite;
+            pointer-events: none;
+        }
+        .history-pagination__label {
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            letter-spacing: 0.35em;
+            color: rgba(148, 197, 255, 0.8);
+            font-weight: 600;
+            position: relative;
+            z-index: 1;
+            text-shadow: 0 2px 10px rgba(59, 130, 246, 0.35);
+            white-space: nowrap;
+            margin-right: 8px;
+        }
+        .history-pagination__meta {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+            flex: 1;
+        }
+        .history-pagination__metric {
+            display: flex;
+            flex-direction: row;
+            align-items: baseline;
+            gap: 8px;
+            white-space: nowrap;
+        }
+        .history-pagination__metric-label {
+            font-size: 0.82rem;
+            letter-spacing: 0.08em;
+            color: rgba(148, 197, 255, 0.7);
+            font-weight: 500;
+        }
+        .history-pagination__metric-value {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: rgba(236, 245, 255, 0.98);
+            text-shadow: 
+                0 0 16px rgba(96, 165, 250, 0.5),
+                0 2px 8px rgba(59, 130, 246, 0.4);
+            line-height: 1;
+        }
+        .history-pagination__divider {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: rgba(96, 165, 250, 0.6);
+            box-shadow: 0 0 8px rgba(96, 165, 250, 0.5);
+            flex-shrink: 0;
+        }
+        .history-pagination__progress {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            position: relative;
+            z-index: 1;
+            flex: 0 0 auto;
+        }
+        .history-pagination__progress-track {
+            position: relative;
+            width: 140px;
+            height: 6px;
+            border-radius: 999px;
+            background: rgba(30, 64, 175, 0.45);
+            overflow: hidden;
+            box-shadow: 
+                inset 0 2px 4px rgba(8, 20, 48, 0.5),
+                0 0 0 1px rgba(59, 130, 246, 0.35);
+        }
+        .history-pagination__progress-fill {
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, 
+                rgba(96, 165, 250, 0.98), 
+                rgba(56, 189, 248, 0.95),
+                rgba(34, 211, 238, 0.92));
+            box-shadow: 
+                0 0 16px rgba(96, 165, 250, 0.7),
+                0 0 30px rgba(59, 130, 246, 0.5);
+            transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+            animation: history-progress-pulse 3s ease-in-out infinite;
+        }
+        .history-pagination__progress-text {
+            font-size: 0.78rem;
+            letter-spacing: 0.15em;
+            color: rgba(148, 197, 255, 0.8);
+            font-weight: 500;
+            white-space: nowrap;
+            min-width: 80px;
+            text-align: left;
+        }
+        div[data-testid="stHorizontalBlock"]:has(.st-key-history_pagination_prev_) {
+            margin: 36px auto 24px;
+            padding: 0;
+            gap: 20px;
+            align-items: center;
+            position: relative;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+        }
+        div[data-testid="stHorizontalBlock"]:has(.st-key-history_pagination_prev_) > div[data-testid="stVerticalBlock"] {
+            width: 100%;
+        }
+        div[data-testid="stHorizontalBlock"]:has(.st-key-history_pagination_prev_) > div[data-testid="stColumn"] {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+        }
+        div[data-testid="stHorizontalBlock"]:has(.st-key-history_pagination_prev_) > div[data-testid="stColumn"]:has(.history-pagination__info) {
+            min-height: 46px;
+        }
+        div[data-testid="stHorizontalBlock"]:has(.st-key-history_pagination_prev_) .stButton {
+            height: 100%;
+            display: flex;
+            align-items: center;
+        }
+        div[data-testid="stHorizontalBlock"]:has(.st-key-history_pagination_prev_) .stButton > button {
+            position: relative;
+            width: 100%;
+            max-width: 160px;
+            min-height: 46px;
+            border-radius: 18px;
+            padding: 13px 20px;
+            font-size: 0.92rem;
+            letter-spacing: 0.14em;
+            font-weight: 600;
+            color: rgba(236, 245, 255, 0.98);
+            background:
+                linear-gradient(135deg, 
+                    rgba(59, 130, 246, 0.75), 
+                    rgba(96, 165, 250, 0.65));
+            border: 1.5px solid rgba(96, 165, 250, 0.55);
+            box-shadow:
+                0 16px 36px rgba(15, 23, 42, 0.65),
+                0 0 20px rgba(96, 165, 250, 0.4),
+                inset 0 0 0 1px rgba(148, 197, 255, 0.25),
+                inset 0 1px 2px rgba(255, 255, 255, 0.12);
+            transition:
+                transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+                box-shadow 0.2s ease,
+                border-color 0.2s ease;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        div[data-testid="stHorizontalBlock"]:has(.st-key-history_pagination_prev_) .stButton > button::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, 
+                rgba(148, 197, 255, 0.2), 
+                rgba(96, 165, 250, 0.15));
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            z-index: 0;
+        }
+        div[data-testid="stHorizontalBlock"]:has(.st-key-history_pagination_prev_) .stButton > button::after {
+            content: "";
+            position: absolute;
+            inset: -3px;
+            border-radius: 21px;
+            background: linear-gradient(135deg, 
+                rgba(96, 165, 250, 0.5), 
+                rgba(56, 189, 248, 0.5));
+            opacity: 0;
+            filter: blur(10px);
+            transition: opacity 0.2s ease;
+            z-index: -1;
+        }
+        div[data-testid="stHorizontalBlock"]:has(.st-key-history_pagination_prev_) .stButton > button > span {
+            position: relative;
+            z-index: 1;
+        }
+        div[data-testid="stHorizontalBlock"]:has(.st-key-history_pagination_prev_) .stButton > button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            border-color: rgba(148, 197, 255, 0.75);
+            box-shadow:
+                0 20px 44px rgba(15, 23, 42, 0.75),
+                0 0 28px rgba(96, 165, 250, 0.55),
+                inset 0 0 0 1px rgba(148, 197, 255, 0.35),
+                inset 0 1px 3px rgba(255, 255, 255, 0.18);
+        }
+        div[data-testid="stHorizontalBlock"]:has(.st-key-history_pagination_prev_) .stButton > button:hover:not(:disabled)::before {
+            opacity: 1;
+        }
+        div[data-testid="stHorizontalBlock"]:has(.st-key-history_pagination_prev_) .stButton > button:hover:not(:disabled)::after {
+            opacity: 0.7;
+        }
+        div[data-testid="stHorizontalBlock"]:has(.st-key-history_pagination_prev_) .stButton > button:active:not(:disabled) {
+            transform: translateY(0);
+            box-shadow:
+                0 12px 28px rgba(15, 23, 42, 0.65),
+                0 0 16px rgba(96, 165, 250, 0.4),
+                inset 0 0 0 1px rgba(96, 165, 250, 0.4);
+        }
+        div[data-testid="stHorizontalBlock"]:has(.st-key-history_pagination_prev_) .stButton > button:disabled {
+            color: rgba(148, 197, 255, 0.35);
+            border-color: rgba(59, 130, 246, 0.2);
+            background: linear-gradient(135deg, 
+                rgba(15, 23, 42, 0.75), 
+                rgba(15, 23, 42, 0.55));
+            box-shadow: 
+                inset 0 0 0 1px rgba(59, 130, 246, 0.15),
+                0 0 0 rgba(96, 165, 250, 0);
+            cursor: not-allowed;
+        }
+        div[data-testid="stHorizontalBlock"]:has(.history-pagination__info) {
+            row-gap: 0;
+        }
+        @media (max-width: 860px) {
+            div[data-testid="stHorizontalBlock"]:has(.st-key-history_pagination_prev_) {
+                flex-direction: column;
+                gap: 16px;
+            }
+            div[data-testid="stHorizontalBlock"]:has(.st-key-history_pagination_prev_) > div[data-testid="stColumn"] {
+                width: 100%;
+            }
+            .history-pagination__info {
+                flex-direction: column;
+                gap: 16px;
+                padding: 18px 20px;
+            }
+            .history-pagination__label {
+                width: 100%;
+                text-align: center;
+                margin-right: 0;
+                margin-bottom: 4px;
+            }
+            .history-pagination__meta {
+                width: 100%;
+                gap: 14px;
+                justify-content: center;
+            }
+            .history-pagination__progress {
+                width: 100%;
+                justify-content: center;
+            }
+            .history-pagination__progress-track {
+                width: 180px;
+            }
+            .history-pagination__progress-text {
+                min-width: auto;
+            }
         }
         [data-testid="stTabs"] [data-baseweb="tab-list"] {
             gap: 8px;
@@ -252,7 +544,7 @@ def render_history_page() -> None:
             position: relative;
             border-radius: 36px;
             padding: 36px 38px;
-            margin-bottom: 40px;
+            margin-bottom: 26px;
             background:
                 radial-gradient(circle at 12% -10%, rgba(56, 189, 248, 0.12), transparent 45%),
                 radial-gradient(circle at 120% 120%, rgba(59, 130, 246, 0.18), transparent 52%),
@@ -386,7 +678,7 @@ def render_history_page() -> None:
                 0 18px 44px rgba(6, 20, 36, 0.55);
             display: flex;
             flex-direction: column;
-            gap: 26px;
+            gap: 20px;
         }
         .history-card__title-row {
             display: flex;
@@ -728,6 +1020,22 @@ def render_history_page() -> None:
             )
             return
 
+        page_size = st.session_state.get("history_tasks_per_page", DEFAULT_HISTORY_PAGE_SIZE)
+        if not isinstance(page_size, int) or page_size <= 0:
+            page_size = DEFAULT_HISTORY_PAGE_SIZE
+
+        page_state_key = f"history_page_{key_prefix}"
+        total_pages = max(ceil(len(task_list) / page_size), 1)
+        current_page = st.session_state.get(page_state_key, 1)
+        if not isinstance(current_page, int):
+            current_page = 1
+        current_page = max(1, min(current_page, total_pages))
+        st.session_state[page_state_key] = current_page
+
+        start_index = (current_page - 1) * page_size
+        end_index = start_index + page_size
+        visible_tasks = task_list[start_index:end_index]
+
         status_label_map = {
             "FINISHED": ("已完成", "status-finished"),
             "PROCESSING": ("处理中", "status-processing"),
@@ -736,7 +1044,7 @@ def render_history_page() -> None:
             "ERROR": ("失败", "status-error"),
         }
 
-        for index, task in enumerate(task_list):
+        for index, task in enumerate(visible_tasks, start=start_index):
             raw_task_id = task.get("id") or task.get("task_id")
             file_name = task.get("video_filename") or "output.mp4"
             status = str(task.get("status", "UNKNOWN"))
@@ -1037,9 +1345,7 @@ def render_history_page() -> None:
                     f"""
                     <script>
                     (function() {{
-                        const cardId = "{card_id}";
-                        const targetId = "{card_id}-actions";
-                        const holderClass = "history-card__actions-group";
+                        const holderSelector = "#{card_id}-actions .history-card__actions-group";
                         const keyClasses = [
                             "st-key-{key_prefix}_play_{raw_task_id}_{index}",
                             "st-key-{key_prefix}_download_{raw_task_id}_{index}"
@@ -1047,38 +1353,59 @@ def render_history_page() -> None:
                         const doc = window.parent ? window.parent.document : document;
                         if (!doc) return;
                         function ensureHolder() {{
-                            const target = doc.getElementById(targetId);
-                            if (!target) return null;
-                            let holder = target.querySelector("." + holderClass);
-                            if (!holder) {{
-                                holder = doc.createElement("div");
-                                holder.className = holderClass;
-                                target.appendChild(holder);
-                            }}
-                            return holder;
+                            return doc.querySelector(holderSelector);
                         }}
-                        function moveWidgets() {{
+                        function syncButtons() {{
                             const holder = ensureHolder();
-                            if (!holder) return true;
-                            let moved = 0;
+                            if (!holder) return false;
+                            let synced = 0;
                             keyClasses.forEach((cls) => {{
-                                const el = doc.querySelector("." + cls);
-                                if (el && !holder.contains(el)) {{
-                                    holder.appendChild(el);
-                                    el.style.width = "100%";
-                                    moved += 1;
+                                const origin = doc.querySelector("." + cls);
+                                if (!origin) return;
+                                const originButton = origin.querySelector("button");
+                                if (!originButton) return;
+                                const sourceHtml = origin.innerHTML;
+                                let clone = holder.querySelector(`[data-clone-for="${{cls}}"]`);
+                                if (!clone || clone.getAttribute("data-source-html") !== sourceHtml) {{
+                                    if (clone) {{
+                                        holder.removeChild(clone);
+                                    }}
+                                    clone = origin.cloneNode(true);
+                                    clone.setAttribute("data-clone-for", cls);
+                                    clone.setAttribute("data-source-html", sourceHtml);
+                                    const clonedButton = clone.querySelector("button");
+                                    if (clonedButton) {{
+                                        clonedButton.addEventListener("click", function(evt) {{
+                                            evt.preventDefault();
+                                            evt.stopPropagation();
+                                            originButton.click();
+                                        }});
+                                    }}
+                                    holder.appendChild(clone);
                                 }}
+                                if (clone) {{
+                                    clone.style.width = "100%";
+                                    clone.style.margin = "0";
+                                    clone.style.display = "flex";
+                                    clone.style.justifyContent = "center";
+                                    clone.style.alignItems = "center";
+                                }}
+                                origin.style.position = "absolute";
+                                origin.style.left = "-9999px";
+                                origin.style.visibility = "hidden";
+                                origin.style.pointerEvents = "none";
+                                synced += 1;
                             }});
-                            return moved === keyClasses.length;
+                            return synced === keyClasses.length;
                         }}
                         let attempts = 0;
-                        const limit = 40;
+                        const maxAttempts = 50;
                         const timer = setInterval(() => {{
                             attempts += 1;
-                            if (moveWidgets() || attempts >= limit) {{
+                            if (syncButtons() || attempts >= maxAttempts) {{
                                 clearInterval(timer);
                             }}
-                        }}, 50);
+                        }}, 80);
                     }})();
                     </script>
                     """
@@ -1104,6 +1431,63 @@ def render_history_page() -> None:
                 ]
             )
             st.markdown("\n".join(closing_lines), unsafe_allow_html=True)
+
+        pagination_block = st.container()
+        with pagination_block:
+            prev_col, info_col, next_col = st.columns([1, 4, 1], gap="large")
+            progress_percent = 100
+            if total_pages > 0:
+                progress_percent = max(0, min(100, int(round((current_page / total_pages) * 100))))
+            progress_text = f"{progress_percent}% 已浏览" if total_pages > 1 else "全部已浏览"
+            with prev_col:
+                if st.button(
+                    "← 上一页",
+                    key=f"history_pagination_prev_{key_prefix}",
+                    disabled=current_page <= 1,
+                ):
+                    if total_pages > 1:
+                        st.session_state[page_state_key] = max(1, current_page - 1)
+                        st.rerun()
+            with info_col:
+                st.markdown(
+                    f"""
+                    <div class="history-pagination__info">
+                        <div class="history-pagination__label">历史记录分页</div>
+                        <div class="history-pagination__meta">
+                            <span class="history-pagination__metric">
+                                <span class="history-pagination__metric-label">当前页</span>
+                                <span class="history-pagination__metric-value">{current_page}</span>
+                            </span>
+                            <span class="history-pagination__divider"></span>
+                            <span class="history-pagination__metric">
+                                <span class="history-pagination__metric-label">总页数</span>
+                                <span class="history-pagination__metric-value">{total_pages}</span>
+                            </span>
+                            <span class="history-pagination__divider"></span>
+                            <span class="history-pagination__metric">
+                                <span class="history-pagination__metric-label">任务数量</span>
+                                <span class="history-pagination__metric-value">{len(task_list)}</span>
+                            </span>
+                        </div>
+                        <div class="history-pagination__progress">
+                            <div class="history-pagination__progress-track">
+                                <div class="history-pagination__progress-fill" style="width: {progress_percent}%;"></div>
+                            </div>
+                            <span class="history-pagination__progress-text">{progress_text}</span>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            with next_col:
+                if st.button(
+                    "下一页 →",
+                    key=f"history_pagination_next_{key_prefix}",
+                    disabled=current_page >= total_pages,
+                ):
+                    if total_pages > 1:
+                        st.session_state[page_state_key] = min(total_pages, current_page + 1)
+                        st.rerun()
 
     for (key_prefix, _label, task_collection, allow_download_flag), tab in zip(tab_specs, tabs):
         with tab:
