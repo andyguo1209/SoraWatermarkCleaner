@@ -201,6 +201,39 @@ def fetch_pending_users(token: str, api_base_url: str) -> list[dict]:
     return []
 
 
+def fetch_user_usage_stats(token: str, api_base_url: str) -> Optional[dict]:
+    """获取管理员视角的用户使用统计信息。"""
+    try:
+        response = requests.get(
+            f"{api_base_url}/admin/users/stats",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        if response.status_code == 200:
+            return response.json()
+        if response.status_code == 401:
+            _invalidate_session("登录状态已过期，请重新登录")
+        elif response.status_code == 403:
+            try:
+                detail = response.json().get("detail", "仅管理员可访问该资源")
+            except Exception:
+                detail = "仅管理员可访问该资源"
+            st.error(detail)
+        else:
+            try:
+                detail = response.json().get("detail")
+                if detail:
+                    st.error(detail)
+                else:
+                    st.error("无法获取用户统计数据，请稍后再试。")
+            except Exception:
+                st.error("无法获取用户统计数据，请稍后再试。")
+        return None
+    except Exception as e:
+        st.error(f"获取用户统计数据失败：{str(e)}")
+        return None
+
+
 def approve_pending_user(token: str, api_base_url: str, user_id: int) -> tuple[bool, str]:
     """审核通过指定用户账号"""
     try:

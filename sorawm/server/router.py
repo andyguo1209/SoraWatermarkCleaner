@@ -5,7 +5,7 @@ from uuid import uuid4
 import aiofiles
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, Header
 from fastapi.responses import FileResponse
-from sqlalchemy import desc, select, func
+from sqlalchemy import desc, select, func, case
 
 from sorawm.configs import UNIVERSAL_VERIFICATION_CODE, VERIFICATION_CODE_ENABLED
 from sorawm.server.auth_utils import (
@@ -18,12 +18,16 @@ from sorawm.server.auth_utils import (
 from sorawm.server.db import get_session
 from sorawm.server.models import User, Task
 from sorawm.server.schemas import (
+    DailyUsagePoint,
     LoginResponse,
     TaskDetail,
     TaskHistoryResponse,
     UserInfo,
     UserLogin,
     UserRegister,
+    UsageOverview,
+    UserUsageStat,
+    UserUsageStatsResponse,
     WMRemoveResults,
 )
 from sorawm.server.worker import worker
@@ -243,6 +247,116 @@ async def approve_user_account(
         target_user.session_token = None
 
         return {"message": "用户已通过审核"}
+
+
+@router.get("/admin/users/stats", response_model=UserUsageStatsResponse)
+async def get_user_usage_stats(current_user: User = Depends(get_current_user)):
+    """管理员：获取用户使用统计与报表数据"""
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="仅管理员可访问该资源")
+
+    async with get_session() as session:
+        user_rows = await session.execute(select(User).order_by(User.created_at.asc()))
+        users = user_rows.scalars().all()
+
+        task_rows = await session.execute(
+            select(Task.user_id, Task.status, Task.created_at).order_by(Task.created_at.asc())
+        )
+        task_data = task_rows.all()
+
+        stats_map: dict[int, dict] = {
+            user.id: {
+                "total_tasks": 0,
+                "finished_tasks": 0,
+                "processing_tasks": 0,
+                "error_tasks": 0,
+                "last_task_at": None,
+                "first_task_at": None,
+            }
+            for user in users
+        }
+
+        overview_totals = {
+            "total_users": len(users),
+            "active_users": 0,
+            "pending_users": len([u for u in users if not u.is_approved]),
+            "total_tasks": 0,
+            "finished_tasks": 0,
+            "processing_tasks": 0,
+            "error_tasks": 0,
+        }
+
+        daily_accumulator: dict[date, dict[str, int]] = {}
+
+        for user_id, status, created_at in task_data:
+            stats = stats_map.get(user_id)
+            if stats is None:
+                continue
+            stats["total_tasks"] += 1
+            if status == "FINISHED":
+                stats["finished_tasks"] += 1
+            elif status in {"PROCESSING", "UPLOADING", "PENDING"}:
+                stats["processing_tasks"] += 1
+            elif status == "ERROR":
+                stats["error_tasks"] += 1
+
+            if stats["last_task_at"] is None or created_at > stats["last_task_at"]:
+                stats["last_task_at"] = created_at
+            if stats["first_task_at"] is None or created_at < stats["first_task_at"]:
+                stats["first_task_at"] = created_at
+
+            overview_totals["total_tasks"] += 1
+            if status == "FINISHED":
+                overview_totals["finished_tasks"] += 1
+            elif status in {"PROCESSING", "UPLOADING", "PENDING"}:
+                overview_totals["processing_tasks"] += 1
+            elif status == "ERROR":
+                overview_totals["error_tasks"] += 1
+
+            day_key = created_at.date()
+            bucket = daily_accumulator.setdefault(day_key, {"total_tasks": 0, "finished_tasks": 0})
+            bucket["total_tasks"] += 1
+            if status == "FINISHED":
+                bucket["finished_tasks"] += 1
+
+        users_stats: list[UserUsageStat] = []
+        for user in users:
+            stats = stats_map[user.id]
+            if stats["total_tasks"] > 0:
+                overview_totals["active_users"] += 1
+            users_stats.append(
+                UserUsageStat(
+                    id=user.id,
+                    username=user.username,
+                    email=user.email,
+                    created_at=user.created_at,
+                    is_admin=bool(user.is_admin),
+                    is_approved=bool(user.is_approved),
+                    total_tasks=stats["total_tasks"],
+                    finished_tasks=stats["finished_tasks"],
+                    processing_tasks=stats["processing_tasks"],
+                    error_tasks=stats["error_tasks"],
+                    last_task_at=stats["last_task_at"],
+                    first_task_at=stats["first_task_at"],
+                )
+            )
+
+        daily_stats = [
+            DailyUsagePoint(
+                day=day,
+                total_tasks=counts["total_tasks"],
+                finished_tasks=counts["finished_tasks"],
+            )
+            for day, counts in sorted(daily_accumulator.items(), key=lambda x: x[0])
+        ]
+
+        overview = UsageOverview(**overview_totals)
+
+        return UserUsageStatsResponse(
+            overview=overview,
+            users=users_stats,
+            daily=daily_stats,
+        )
 
 
 async def process_upload_and_queue(

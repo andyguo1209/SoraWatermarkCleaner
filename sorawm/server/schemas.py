@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 from enum import StrEnum
 
 from pydantic import BaseModel, EmailStr, Field
@@ -74,3 +74,44 @@ class WMRemoveResults(BaseModel):
     percentage: int
     status: Status
     download_url: str | None = None
+
+
+class UserUsageStat(BaseModel):
+    """单个用户的使用统计"""
+    id: int
+    username: str
+    email: str | None
+    created_at: datetime
+    is_admin: bool
+    is_approved: bool
+    total_tasks: int
+    finished_tasks: int
+    processing_tasks: int
+    error_tasks: int
+    last_task_at: datetime | None
+    first_task_at: datetime | None
+
+
+class UsageOverview(BaseModel):
+    """用户使用总览数据"""
+    total_users: int
+    active_users: int
+    pending_users: int
+    total_tasks: int
+    finished_tasks: int
+    processing_tasks: int
+    error_tasks: int
+
+
+class DailyUsagePoint(BaseModel):
+    """按天统计的任务数据"""
+    day: date
+    total_tasks: int
+    finished_tasks: int
+
+
+class UserUsageStatsResponse(BaseModel):
+    """管理员查看的用户使用统计汇总"""
+    overview: UsageOverview
+    users: list[UserUsageStat]
+    daily: list[DailyUsagePoint]

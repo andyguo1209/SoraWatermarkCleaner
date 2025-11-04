@@ -477,7 +477,7 @@ def render_history_page() -> None:
             letter-spacing: 0.05em;
         }
         .history-hero__summary {
-            flex: 0 0 360px;
+            flex: 0 0 320px;
             background: linear-gradient(135deg, rgba(6, 78, 59, 0.35), rgba(13, 148, 136, 0.25));
             border-radius: 24px;
             padding: 24px 28px 28px;
@@ -488,7 +488,7 @@ def render_history_page() -> None:
             color: rgba(226, 232, 240, 0.92);
             display: flex;
             flex-direction: column;
-            gap: 12px;
+            gap: 10px;
         }
         .history-hero__summary-label {
             font-size: 0.9rem;
@@ -497,7 +497,7 @@ def render_history_page() -> None:
             color: rgba(165, 243, 252, 0.78);
         }
         .history-hero__summary-value {
-            font-size: 2.6rem;
+            font-size: 2.3rem;
             font-weight: 800;
             color: #5eead4;
         }
