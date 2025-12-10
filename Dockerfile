@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     libgl1 \
     libglib2.0-0 \
     curl \
+    nginx \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for fast python package management
@@ -26,10 +27,11 @@ RUN uv sync --frozen
 # Copy the rest of the application
 COPY . .
 
-# Expose Streamlit port
-EXPOSE 8501
-# Expose Uvicorn port
-EXPOSE 8000
+# Configure Nginx
+COPY nginx.conf /etc/nginx/nginx.conf
+
+# Expose Nginx port
+EXPOSE 8080
 
 # Make start script executable
 RUN chmod +x scripts/start_docker.sh

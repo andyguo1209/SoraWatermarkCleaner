@@ -9,6 +9,10 @@ python init_database.py
 echo "Starting backend..."
 python start_server.py --port 8000 &
 
+# Start Nginx
+echo "Starting Nginx..."
+nginx
+
 # Wait for backend to be ready (optional, but good practice)
 sleep 5
 
