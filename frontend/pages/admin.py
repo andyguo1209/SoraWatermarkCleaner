@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from frontend.config import API_BASE_URL
+from frontend.services import get_sora_wm
 from sorawm.utils.ui_utils import (
     approve_pending_user,
     fetch_current_user,
@@ -620,6 +621,7 @@ div[data-testid="stMarkdownPre"]:has(.stCode code div[style*="background-color: 
     usage_tab, approval_tab = st.tabs(["📈 使用分析", "📝 用户审批"])
 
     with usage_tab:
+        # 等级设置已移除
         def _format_int(value: object) -> str:
             try:
                 return f"{int(value):,}"

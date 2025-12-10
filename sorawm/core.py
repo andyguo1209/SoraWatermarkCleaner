@@ -24,20 +24,25 @@ from sorawm.configs import (
     PROCESS_REGION_ONLY,
     REGION_MARGIN,
     MAX_FRAMES_WITHOUT_DETECTION,
+    TEMPLATE_THRESHOLD,
 )
+
+VIDEO_EXTENSIONS = [".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv", ".webm"]
 
 
 class SoraWM:
-    def __init__(self):
+    def __init__(self, clean_level: str | None = None):
         self.detector = SoraWaterMarkDetector()
         self.cleaner = WaterMarkCleaner()
         self.ffmpeg_preset = FFMPEG_PRESET
         self.enable_hardware_encoding = ENABLE_HARDWARE_ENCODING
         self.batch_size = BATCH_SIZE
-        self.detection_interval = DETECTION_INTERVAL
+        # 取消等级档位，直接使用参数化配置
+        self.template_threshold = float(TEMPLATE_THRESHOLD)
+        self.detection_interval = int(DETECTION_INTERVAL)
         self.enable_single_pass = ENABLE_SINGLE_PASS
         self.process_region_only = PROCESS_REGION_ONLY
-        self.region_margin = REGION_MARGIN
+        self.region_margin = int(REGION_MARGIN)
         self.max_frames_without_detection = MAX_FRAMES_WITHOUT_DETECTION
 
     def _get_video_codec(self):
@@ -72,34 +77,105 @@ class SoraWM:
             处理后的帧
         """
         x1, y1, x2, y2 = bbox
-        margin = self.region_margin
         
-        # 扩展区域（带边距）
+        # 验证边界框有效性
+        if x2 <= x1 or y2 <= y1 or x1 < 0 or y1 < 0 or x2 > width or y2 > height:
+            logger.warning(f"Invalid bbox {bbox}, skipping watermark removal")
+            return frame
+        
+        # 计算bbox尺寸，动态调整边距（避免小bbox用大边距导致模糊）
+        bbox_w = x2 - x1
+        bbox_h = y2 - y1
+        bbox_size = max(bbox_w, bbox_h)
+        
+        # 边距策略：小bbox用小边距，大bbox用大边距，但不超过限制
+        if bbox_size < 50:
+            margin = min(15, self.region_margin)  # 小bbox用更小边距
+        elif bbox_size < 100:
+            margin = min(25, self.region_margin)
+        else:
+            margin = min(35, self.region_margin)  # 最大边距35像素
+        
+        # 扩展区域（带边距，但限制最大边距避免处理范围过大）
         rx1 = max(0, x1 - margin)
         ry1 = max(0, y1 - margin)
         rx2 = min(width, x2 + margin)
         ry2 = min(height, y2 + margin)
         
+        # 确保区域有效
+        if rx2 <= rx1 or ry2 <= ry1:
+            logger.warning(f"Invalid expanded region from bbox {bbox}, skipping")
+            return frame
+        
         # 提取区域
         region = frame[ry1:ry2, rx1:rx2].copy()
         
-        # 创建区域mask
+        # 创建区域mask - 精确对应水印位置
         region_mask = np.zeros((ry2 - ry1, rx2 - rx1), dtype=np.uint8)
         # mask相对于region的坐标
-        mask_y1 = y1 - ry1
-        mask_y2 = y2 - ry1
-        mask_x1 = x1 - rx1
-        mask_x2 = x2 - rx1
-        region_mask[mask_y1:mask_y2, mask_x1:mask_x2] = 255
+        mask_y1 = max(0, y1 - ry1)
+        mask_y2 = min(ry2 - ry1, y2 - ry1)
+        mask_x1 = max(0, x1 - rx1)
+        mask_x2 = min(rx2 - rx1, x2 - rx1)
+        
+        # 确保mask区域有效
+        if mask_x2 > mask_x1 and mask_y2 > mask_y1:
+            region_mask[mask_y1:mask_y2, mask_x1:mask_x2] = 255
+        else:
+            logger.warning(f"Invalid mask region, skipping")
+            return frame
         
         # 只处理小区域
         cleaned_region = self.cleaner.clean(region, region_mask)
         
-        # 复制回原帧
+        # 复制回原帧 - 使用原帧copy避免副作用
         result_frame = frame.copy()
         result_frame[ry1:ry2, rx1:rx2] = cleaned_region
         
         return result_frame
+
+    def run_batch(
+        self,
+        input_video_dir_path: Path,
+        output_video_dir_path: Path | None = None,
+        progress_callback: Callable[[int], None] | None = None,
+    ):
+        """批量处理目录中的多个视频文件
+        
+        参考GitHub官方版本实现
+        """
+        if output_video_dir_path is None:
+            output_video_dir_path = input_video_dir_path.parent / "watermark_removed"
+            logger.warning(
+                f"output_video_dir_path is not set, using {output_video_dir_path} as output_video_dir_path"
+            )
+        output_video_dir_path.mkdir(parents=True, exist_ok=True)
+        input_video_paths = []
+        for ext in VIDEO_EXTENSIONS:
+            input_video_paths.extend(input_video_dir_path.rglob(f"*{ext}"))
+
+        video_lengths = len(input_video_paths)
+        logger.info(f"Found {video_lengths} video(s) to process")
+
+        for idx, input_video_path in enumerate(
+            tqdm(input_video_paths, desc="Processing videos")
+        ):
+            output_video_path = output_video_dir_path / input_video_path.name
+            if progress_callback:
+
+                def batch_progress_callback(single_video_progress: int):
+                    overall_progress = int(
+                        (idx / video_lengths) * 100 + (single_video_progress / video_lengths)
+                    )
+                    progress_callback(min(overall_progress, 100))
+
+                self.run(
+                    input_video_path, output_video_path, progress_callback=batch_progress_callback
+                )
+            else:
+                self.run(
+                    input_video_path, output_video_path, progress_callback=None
+                )
 
     def run(
         self,
@@ -107,13 +183,9 @@ class SoraWM:
         output_video_path: Path,
         progress_callback: Callable[[int], None] | None = None,
     ):
-        """主处理入口，根据配置选择单次或双次遍历"""
-        if self.enable_single_pass:
-            logger.info("使用单次遍历优化模式")
-            return self._run_single_pass(input_video_path, output_video_path, progress_callback)
-        else:
-            logger.info("使用传统双次遍历模式")
-            return self._run_double_pass(input_video_path, output_video_path, progress_callback)
+        """主处理入口，参考官方版本使用双次遍历模式（更稳定可靠）"""
+        logger.info("使用双次遍历模式（官方版本逻辑）")
+        return self._run_double_pass(input_video_path, output_video_path, progress_callback)
 
     def _run_single_pass(
         self,
@@ -212,19 +284,25 @@ class SoraWM:
                 
                 # 处理缓冲区中的每一帧
                 for i, (buf_idx, buf_frame) in enumerate(zip(frame_indices, frame_buffer)):
-                    # 更新bbox
+                    # 更新bbox - 简化逻辑，确保不漏帧
                     if i in detection_map:
                         detection = detection_map[i]
                         if detection["detected"]:
-                            last_bbox = detection["bbox"]
-                            frames_since_detection = 0
+                            # YOLO检测成功，直接使用（简化验证，只检查基本有效性）
+                            detected_bbox = detection["bbox"]
+                            x1, y1, x2, y2 = detected_bbox
+                            if x2 > x1 and y2 > y1:  # 只做基本检查，避免过度验证
+                                last_bbox = detected_bbox
+                                frames_since_detection = 0
+                            # 如果bbox无效，继续使用上一帧的last_bbox（不更新frames_since_detection）
                         else:
+                            # YOLO检测失败，继续使用上一帧的last_bbox
                             frames_since_detection += 1
                     else:
+                        # 跳帧检测，继续使用上一帧的last_bbox
                         frames_since_detection += 1
                     
-                    # 清除水印
-                    # 改进逻辑：只要检测到过bbox就持续使用，除非超过最大容忍帧数
+                    # 清除水印 - 核心逻辑：只要last_bbox存在就处理（除非设置了限制）
                     should_clean = last_bbox is not None
                     if self.max_frames_without_detection > 0:
                         should_clean = should_clean and frames_since_detection < self.max_frames_without_detection
@@ -305,7 +383,7 @@ class SoraWM:
                     int(int(input_video_loader.original_bitrate) * 1.2)
                 )
             else:
-                output_options["crf"] = "23"  # 从18改为23，速度更快且质量仍然很好
+                output_options["crf"] = "18"  # 参考官方版本，使用CRF 18保证质量
             logger.info(f"使用软件编码器: {video_codec}, preset: {self.ffmpeg_preset}")
 
         process_out = (
@@ -333,13 +411,13 @@ class SoraWM:
         for idx, frame in enumerate(
             tqdm(input_video_loader, total=total_frames, desc="Detect watermarks")
         ):
+            # 参考官方版本：简单直接的检测逻辑，不添加复杂的模板匹配
             detection_result = self.detector.detect(frame)
             if detection_result["detected"]:
-                frame_bboxes[idx] = { "bbox": detection_result["bbox"]}
+                frame_bboxes[idx] = {"bbox": detection_result["bbox"]}
                 x1, y1, x2, y2 = detection_result["bbox"]
                 bbox_centers.append((int((x1 + x2) / 2), int((y1 + y2) / 2)))
                 bboxes.append((x1, y1, x2, y2))
-
             else:
                 frame_bboxes[idx] = {"bbox": None}
                 detect_missed.append(idx)
@@ -396,13 +474,14 @@ class SoraWM:
         input_video_loader = VideoLoader(input_video_path)
 
         for idx, frame in enumerate(tqdm(input_video_loader, total=total_frames, desc="Remove watermarks")):
+            # 参考官方版本：支持区域处理模式（如果启用）或全帧处理
             bbox = frame_bboxes[idx]["bbox"]
             if bbox is not None:
                 if self.process_region_only:
                     # 区域处理模式：只处理水印区域（快3-5倍）
                     cleaned_frame = self._clean_region(frame, bbox, width, height)
                 else:
-                    # 全帧处理模式：处理整帧（传统方式）
+                    # 全帧处理模式：处理整帧（传统方式，更稳定可靠）
                     x1, y1, x2, y2 = bbox
                     mask = np.zeros((height, width), dtype=np.uint8)
                     mask[y1:y2, x1:x2] = 255

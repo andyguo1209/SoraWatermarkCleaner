@@ -8,7 +8,7 @@ from loguru import logger
 from sqlalchemy import select
 
 from sorawm.configs import WORKING_DIR
-from sorawm.core import SoraWM
+from sorawm.core_entry import get_cleaner
 from sorawm.server.db import get_session
 from sorawm.server.models import Task
 from sorawm.server.schemas import Status, WMRemoveResults
@@ -24,7 +24,7 @@ class WMRemoveTaskWorker:
 
     async def initialize(self):
         logger.info("Initializing SoraWM models...")
-        self.sora_wm = SoraWM()
+        self.sora_wm = get_cleaner()
         logger.info("SoraWM models initialized")
 
     async def create_task(self, user_id: int, filename: str = None) -> str:

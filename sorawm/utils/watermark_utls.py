@@ -7,6 +7,10 @@ tmpl = cv2.imread(WATER_MARK_TEMPLATE_IMAGE_PATH)
 tmpl_gray = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
 h_tmpl, w_tmpl = tmpl_gray.shape
 
+# 导出模板尺寸供外部使用
+TEMPLATE_WIDTH = w_tmpl
+TEMPLATE_HEIGHT = h_tmpl
+
 
 def detect_watermark(
     img: np.array,

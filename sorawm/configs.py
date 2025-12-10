@@ -60,16 +60,16 @@ REGION_MARGIN = 30
 MAX_FRAMES_WITHOUT_DETECTION = 0  # 0表示无限制，推荐设置
 
 
-# ============= 数据库配置 =============
-# MySQL 数据库配置
-MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
-MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
-MYSQL_USER = os.getenv("MYSQL_USER", "root")
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "hkgai@123")
-MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "sora_watermark_cleaner")
+# ============= 清理参数（取消等级档位，直接参数化） =============
+# 模板匹配阈值（如使用模板检测时）
+TEMPLATE_THRESHOLD = float(os.getenv("TEMPLATE_THRESHOLD", "0.5"))
 
-# 数据库类型配置（sqlite 或 mysql）
-DATABASE_TYPE = os.getenv("DATABASE_TYPE", "mysql")  # 默认使用 mysql
+# 检测间隔与区域边距沿用上方基础配置（可通过环境变量覆盖 BATCH/INTERVAL/MARGIN 本身）
+
+
+
+# 数据库类型配置
+DATABASE_TYPE = "sqlite"  # 强制使用 sqlite
 
 # ============= 验证码配置 =============
 # 万能验证码（写死，用于开发和测试）
