@@ -48,8 +48,8 @@ def user_to_userinfo(user: User) -> UserInfo:
     )
 
 
-async def get_current_user(authorization: str = Header(None)) -> User:
-    """获取当前用户（通过 token）"""
+async def get_authenticated_user(authorization: str = Header(None)) -> User:
+    """获取当前已认证用户（不检查审核状态）"""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="未授权，请先登录")
 
@@ -71,10 +71,17 @@ async def get_current_user(authorization: str = Header(None)) -> User:
         if user.token_expires_at and user.token_expires_at < datetime.now():
             raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
 
-        if not user.is_approved and not user.is_admin:
-            raise HTTPException(status_code=403, detail="账户尚未通过管理员审核")
-
         return user
+
+
+async def get_current_user(current_user: User = Depends(get_authenticated_user)) -> User:
+    """
+    获取当前通过审核的用户
+    Compatibility: Replaces the old strict get_current_user for endpoints requiring approval
+    """
+    if not current_user.is_approved and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="账户尚未通过管理员审核，无法执行此操作")
+    return current_user
 
 
 @router.post("/register", response_model=UserInfo)
@@ -124,7 +131,7 @@ async def register_user(user_data: UserRegister):
 
 @router.post("/login", response_model=LoginResponse)
 async def login_user(user_data: UserLogin):
-    """用户登录"""
+    """用户登录（允许未审核用户登录以查看状态）"""
     async with get_session() as session:
         result = await session.execute(
             select(User).where(User.username == user_data.username)
@@ -134,8 +141,9 @@ async def login_user(user_data: UserLogin):
         if not user or not verify_password(user_data.password, user.password_hash):
             raise HTTPException(status_code=401, detail="用户名或密码错误")
 
-        if not user.is_approved and not user.is_admin:
-            raise HTTPException(status_code=403, detail="账户尚未通过管理员审核")
+        # Removed strict approval check here to allow pending users to login
+        # if not user.is_approved and not user.is_admin:
+        #     raise HTTPException(status_code=403, detail="账户尚未通过管理员审核")
 
         # 更新最后登录时间
         user.last_login = datetime.now()
@@ -154,9 +162,8 @@ async def login_user(user_data: UserLogin):
             message="登录成功"
         )
 
-
 @router.post("/logout")
-async def logout_user(current_user: User = Depends(get_current_user)):
+async def logout_user(current_user: User = Depends(get_authenticated_user)):
     """用户登出，清除现有会话令牌"""
     async with get_session() as session:
         result = await session.execute(select(User).where(User.id == current_user.id))
@@ -168,7 +175,7 @@ async def logout_user(current_user: User = Depends(get_current_user)):
 
 
 @router.get("/me", response_model=UserInfo)
-async def get_current_user_info(current_user: User = Depends(get_current_user)):
+async def get_current_user_info(current_user: User = Depends(get_authenticated_user)):
     """获取当前用户信息"""
     return user_to_userinfo(current_user)
 

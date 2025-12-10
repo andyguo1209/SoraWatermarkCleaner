@@ -182,6 +182,30 @@ def render_features():
 
 def render_upload_page():
     """渲染上传页面"""
+    # 检查用户权限
+    if st.session_state.get("logged_in"):
+        user_info = st.session_state.get("user_info", {})
+        is_admin = user_info.get("is_admin", False)
+        is_approved = user_info.get("is_approved", False)
+        
+        if not is_admin and not is_approved:
+            st.markdown(
+                """
+                <div style='text-align: center; margin-top: 5rem; padding: 3rem;
+                     background: rgba(255, 100, 100, 0.1); border-radius: 20px;
+                     border: 1px solid rgba(255, 100, 100, 0.3);'>
+                    <h2 style='color: #ff6b6b; margin-bottom: 1rem;'>⚠️ 账户待审核</h2>
+                    <p style='color: rgba(255, 255, 255, 0.8); font-size: 1.1rem; line-height: 1.6;'>
+                        您的账户注册申请正在审核中。<br>
+                        为了确保服务质量，我们暂时限制了新用户的上传权限。<br>
+                        请耐心等待管理员通过审核，或联系管理员加快审核进度。
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            return
+
     # 主标题 - 更大更醒目
     st.markdown(
         """

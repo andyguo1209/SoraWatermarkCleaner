@@ -19,6 +19,19 @@ from sorawm.utils.ui_utils import (
 )
 def render_process_page():
     """渲染处理页面 - 显示原视频和处理后的对比"""
+    # 检查用户权限
+    if st.session_state.get("logged_in"):
+        user_info = st.session_state.get("user_info", {})
+        is_admin = user_info.get("is_admin", False)
+        is_approved = user_info.get("is_approved", False)
+        
+        if not is_admin and not is_approved:
+            st.error("⚠️ 您的账户尚未通过审核，无法使用视频处理功能。")
+            if st.button("返回上传页"):
+                st.session_state.page = "upload"
+                st.rerun()
+            return
+
     token = st.session_state.get("user_token")
     if "processing_mode" not in st.session_state:
         st.session_state.processing_mode = "remote" if token else "local"

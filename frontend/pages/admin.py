@@ -31,7 +31,7 @@ def render_admin_page() -> None:
     if not st.session_state.get("logged_in"):
         st.error("请先登录后再访问管理员页面。")
         st.session_state.page = "login"
-        st.experimental_rerun()
+        st.rerun()
         return
 
     # 确保获取最新的用户信息（包含 is_admin 字段）
@@ -48,7 +48,7 @@ def render_admin_page() -> None:
     if not is_admin:
         st.error("仅管理员可访问用户管理页面。")
         st.session_state.page = "upload"
-        st.experimental_rerun()
+        st.rerun()
         return
 
     css_block = textwrap.dedent("""
@@ -519,13 +519,18 @@ def render_admin_page() -> None:
     font-size: 0.9rem;
 }
 .admin-chip {
-    padding: 4px 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 36px;
+    padding: 0 16px;
     border-radius: 999px;
     border: 1px solid rgba(59, 130, 246, 0.4);
     background: rgba(59, 130, 246, 0.12);
     color: rgba(191, 219, 254, 0.95);
-    font-size: 0.78rem;
-    letter-spacing: 0.2em;
+    font-size: 0.82rem;
+    font-weight: 500;
+    letter-spacing: 0.1em;
 }
 [data-testid="stVerticalBlock"] .stButton > button {
     border-radius: 14px;
@@ -592,7 +597,7 @@ div[data-testid="stMarkdownPre"]:has(.stCode code div[style*="background-color: 
     if not token:
         st.error("未检测到有效的管理员凭证，请重新登录。")
         st.session_state.page = "login"
-        st.experimental_rerun()
+        st.rerun()
         return
 
     with st.spinner("正在加载用户使用统计..."):
@@ -851,8 +856,10 @@ div[data-testid="stMarkdownPre"]:has(.stCode code div[style*="background-color: 
         )
         if pending_users:
             for index, user in enumerate(pending_users):
-                card = st.container()
-                with card:
+                with st.container():
+                    # Marker to trigger CSS :has() selector for the parent vertical block
+                    st.markdown("<div class='admin-card-marker'></div>", unsafe_allow_html=True)
+                    
                     info_col, action_col = st.columns([5, 1])
                     with info_col:
                         card_html = textwrap.dedent(
@@ -876,10 +883,70 @@ div[data-testid="stMarkdownPre"]:has(.stCode code div[style*="background-color: 
                             success, message = approve_pending_user(token, API_BASE_URL, user.get("id"))
                             if success:
                                 st.success(message)
-                                st.experimental_rerun()
+                                st.rerun()
                             else:
                                 st.error(message)
         else:
             st.success("当前没有待审核的用户。")
 
     st.markdown("</div>", unsafe_allow_html=True)
+    
+    # CSS Hack: Use :has() to style the parent container of the approval card
+    # This styling will apply to the stVerticalBlock that contains the marker,
+    # effectively wrapping both the info columns and the button column in one styled card.
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stVerticalBlock"]:has(.admin-card-marker) {
+            margin-bottom: 24px;
+            padding: 22px 26px;
+            border-radius: 18px;
+            border: 1px solid rgba(59, 130, 246, 0.22);
+            background: linear-gradient(140deg, rgba(8, 24, 56, 0.85), rgba(4, 14, 30, 0.9));
+            box-shadow: 0 20px 42px rgba(4, 14, 30, 0.45);
+            gap: 0 !important;
+        }
+
+        /* Adjustment to remove default spacing inside the card container */
+        div[data-testid="stVerticalBlock"]:has(.admin-card-marker) > div {
+            gap: 0 !important;
+        }
+        
+        /* Remove original styling from the inner text wrapper since the parent now handles it */
+        .admin-approval-card {
+            border: none;
+            background: transparent;
+            box-shadow: none;
+            padding: 0;
+            margin: 0;
+        }
+        
+        /* Ensure the button is vertically centered and looks good */
+        div[data-testid="stVerticalBlock"]:has(.admin-card-marker) .stButton {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            height: 100%;
+            padding: 0;
+        }
+        
+        div[data-testid="stVerticalBlock"]:has(.admin-card-marker) .stButton button {
+            background: linear-gradient(135deg, rgba(45, 212, 191, 0.2), rgba(56, 189, 248, 0.2));
+            border: 1px solid rgba(45, 212, 191, 0.4);
+            color: #ccfbf1;
+            width: auto;
+            min-width: 80px;
+            height: 36px;
+            padding: 0 16px;
+            line-height: 1;
+        }
+        div[data-testid="stVerticalBlock"]:has(.admin-card-marker) .stButton button:hover {
+            background: linear-gradient(135deg, rgba(45, 212, 191, 0.3), rgba(56, 189, 248, 0.3));
+            border-color: rgba(45, 212, 191, 0.6);
+            color: #ffffff;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
