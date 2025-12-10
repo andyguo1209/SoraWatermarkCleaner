@@ -10,7 +10,7 @@ venv/
 .gitignore
 .idea/
 .vscode/
-data/
+data/*
 !data/db.sqlite3
 output/
 logs/
