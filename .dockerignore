@@ -11,6 +11,7 @@ venv/
 .idea/
 .vscode/
 data/
+!data/db.sqlite3
 output/
 logs/
 working_dir/

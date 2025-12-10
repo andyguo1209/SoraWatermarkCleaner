@@ -27,6 +27,9 @@ RUN uv sync --frozen
 # Copy the rest of the application
 COPY . .
 
+# Copy local database for initial state (Warning: Data changes in Cloud Run won't persist!)
+COPY data/db.sqlite3 /app/data/db.sqlite3
+
 # Configure Nginx
 COPY nginx.conf /etc/nginx/nginx.conf
 
